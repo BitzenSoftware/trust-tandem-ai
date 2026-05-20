@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { useTranslation, LangSelector } from "@/lib/i18n/context";
 
 const API = process.env.NEXT_PUBLIC_API_URL + "/api/v1";
 
@@ -40,13 +41,14 @@ function MoonIcon() {
 
 export default function DashboardClient({ token, userName }: { token: string; userName: string }) {
   const router = useRouter();
-  const [tab,      setTab]      = useState<"dashboard" | "queue">("dashboard");
-  const [db,       setDb]       = useState<CleanRecord[]>([]);
-  const [queue,    setQueue]    = useState<QueueItem[]>([]);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState("");
-  const [diagnoses,setDiagnoses]= useState<Record<string,string>>({});
-  const [theme,    setTheme]    = useState<"light"|"dark">("light");
+  const { t } = useTranslation();
+  const [tab,       setTab]       = useState<"dashboard" | "queue">("dashboard");
+  const [db,        setDb]        = useState<CleanRecord[]>([]);
+  const [queue,     setQueue]     = useState<QueueItem[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [error,     setError]     = useState("");
+  const [diagnoses, setDiagnoses] = useState<Record<string,string>>({});
+  const [theme,     setTheme]     = useState<"light"|"dark">("light");
 
   useEffect(() => {
     const saved = (localStorage.getItem("theme") || document.documentElement.getAttribute("data-theme") || "light") as "light"|"dark";
@@ -66,21 +68,21 @@ export default function DashboardClient({ token, userName }: { token: string; us
     setLoading(true); setError("");
     try {
       const [dbRes, qRes] = await Promise.all([
-        apiFetch(`${API}/database`,      { headers }),
-        apiFetch(`${API}/review-queue`,  { headers }),
+        apiFetch(`${API}/database`,     { headers }),
+        apiFetch(`${API}/review-queue`, { headers }),
       ]);
       if (dbRes.ok) setDb(await dbRes.json());
-      else if (dbRes.status === 403) setError("Sem permissão: perfil sem tenant_id.");
-      else if (dbRes.status === 401) setError("Sessão expirada. Faça login novamente.");
-      else setError(`Erro ${dbRes.status} da API.`);
+      else if (dbRes.status === 403) setError(t.dashboard.err403);
+      else if (dbRes.status === 401) setError(t.dashboard.err401);
+      else setError(`${t.dashboard.errApi} ${dbRes.status}.`);
       if (qRes.ok) setQueue(await qRes.json());
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError")
-        setError("API não respondeu em 20s — servidor pode estar iniciando. Tente novamente.");
+        setError(t.dashboard.errTimeout);
       else
-        setError("Não foi possível conectar à API.");
+        setError(t.dashboard.errConn);
     } finally { setLoading(false); }
-  }, [token]);
+  }, [token, t]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -94,7 +96,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
     try {
       await apiFetch(`${API}/review-queue/${encodeURIComponent(name)}`, { method: "DELETE", headers });
       fetchData();
-    } catch { setError("Erro ao expurgar."); }
+    } catch { setError(t.dashboard.expurgeError); }
   }
 
   async function handleDiagnose(name: string) {
@@ -105,7 +107,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
         const d = await res.json();
         setDiagnoses(p => ({ ...p, [name]: d.diagnostico }));
       }
-    } catch { setDiagnoses(p => ({ ...p, [name]: "Erro ao consultar Claude." })); }
+    } catch { setDiagnoses(p => ({ ...p, [name]: t.dashboard.claudeError })); }
   }
 
   const conformidade = db.length + queue.length > 0
@@ -120,8 +122,8 @@ export default function DashboardClient({ token, userName }: { token: string; us
     userName:    { fontSize: "0.8rem", color: "var(--text-secondary)", padding: "6px 12px", backgroundColor: "var(--bg-surface-2)", borderRadius: 8, border: "1px solid var(--border)" },
     logoutBtn:   { fontSize: "0.8rem", color: "var(--danger)", background: "none", border: "none", cursor: "pointer", fontWeight: 500 },
     nav:         { backgroundColor: "var(--bg-surface)", borderBottom: "1px solid var(--border)", padding: "0 24px", display: "flex", gap: 0 },
-    tabActive:   { padding: "14px 20px", fontSize: "0.85rem", fontWeight: 600, color: "var(--accent)", borderBottom: "2px solid var(--accent)", background: "none", border: "none", borderBottomStyle: "solid" as const, borderBottomWidth: 2, borderBottomColor: "var(--accent)", cursor: "pointer" },
-    tabInactive: { padding: "14px 20px", fontSize: "0.85rem", fontWeight: 500, color: "var(--text-muted)", borderBottom: "2px solid transparent", background: "none", border: "none", borderBottomStyle: "solid" as const, borderBottomWidth: 2, borderBottomColor: "transparent", cursor: "pointer" },
+    tabActive:   { padding: "14px 20px", fontSize: "0.85rem", fontWeight: 600, color: "var(--accent)", background: "none", border: "none", borderBottom: "2px solid var(--accent)", cursor: "pointer" },
+    tabInactive: { padding: "14px 20px", fontSize: "0.85rem", fontWeight: 500, color: "var(--text-muted)", background: "none", border: "none", borderBottom: "2px solid transparent", cursor: "pointer" },
     main:        { maxWidth: 1100, margin: "0 auto", padding: "32px 24px" },
     card:        { backgroundColor: "var(--bg-surface)", borderRadius: 14, border: "1px solid var(--border)", boxShadow: "var(--shadow-sm)", padding: "20px 24px" },
     metricLabel: { fontSize: "0.72rem", fontWeight: 500, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 8 },
@@ -150,15 +152,16 @@ export default function DashboardClient({ token, userName }: { token: string; us
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
           <div>
             <div style={s.logo}>Trust & Tandem AI</div>
-            <div style={s.logoSub}>Governança de Dados LGPD</div>
+            <div style={s.logoSub}>{t.dashboard.subtitle}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <LangSelector />
             <button onClick={toggleTheme} style={s.themeBtn}>
               {theme === "light" ? <MoonIcon /> : <SunIcon />}
               {theme === "light" ? "Dark" : "Light"}
             </button>
             <span style={s.userName}>{userName}</span>
-            <button onClick={handleLogout} style={s.logoutBtn}>Sair</button>
+            <button onClick={handleLogout} style={s.logoutBtn}>{t.dashboard.logout}</button>
           </div>
         </div>
       </header>
@@ -166,12 +169,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
       {/* Tabs */}
       <div style={s.nav}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", width: "100%" }}>
-          {(["dashboard","queue"] as const).map(t => (
-            <button key={t} onClick={() => setTab(t)}
-              style={tab === t ? s.tabActive : s.tabInactive}>
-              {t === "dashboard" ? "Dashboard" : (
+          {(["dashboard","queue"] as const).map(tab_ => (
+            <button key={tab_} onClick={() => setTab(tab_)}
+              style={tab === tab_ ? s.tabActive : s.tabInactive}>
+              {tab_ === "dashboard" ? t.dashboard.tabDashboard : (
                 <span style={{ display: "flex", alignItems: "center" }}>
-                  Fila de Revisão
+                  {t.dashboard.tabQueue}
                   {queue.length > 0 && <span style={s.badge}>{queue.length}</span>}
                 </span>
               )}
@@ -185,23 +188,23 @@ export default function DashboardClient({ token, userName }: { token: string; us
         {loading ? (
           <div style={{ textAlign: "center", padding: "80px 0" }}>
             <div style={{ width: 36, height: 36, border: "3px solid var(--border)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
-            <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>A carregar dados...</p>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.78rem", marginTop: 6 }}>Cold start pode levar até 30s</p>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>{t.dashboard.loading}</p>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.78rem", marginTop: 6 }}>{t.dashboard.coldStart}</p>
           </div>
         ) : error ? (
           <div style={s.errorBox}>
-            <p style={{ fontWeight: 600, marginBottom: 4, fontSize: "0.9rem" }}>Erro de conexão</p>
+            <p style={{ fontWeight: 600, marginBottom: 4, fontSize: "0.9rem" }}>{t.dashboard.connError}</p>
             <p style={{ fontSize: "0.82rem", opacity: 0.85 }}>{error}</p>
-            <button onClick={fetchData} style={s.retryBtn}>Tentar novamente →</button>
+            <button onClick={fetchData} style={s.retryBtn}>{t.dashboard.retry}</button>
           </div>
         ) : tab === "dashboard" ? (
           <>
-            {/* Métricas */}
+            {/* MÃ©tricas */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 24 }}>
               {[
-                { label: "Total de Ingestões",       value: db.length + queue.length, accent: false },
-                { label: "Conformidade LGPD",         value: `${conformidade}%`,       accent: true  },
-                { label: "Banco de Dados Seguro",     value: db.length,               accent: false },
+                { label: t.dashboard.metricTotal,      value: db.length + queue.length, accent: false },
+                { label: t.dashboard.metricCompliance, value: `${conformidade}%`,        accent: true  },
+                { label: t.dashboard.metricSecure,     value: db.length,                accent: false },
               ].map(({ label, value, accent }) => (
                 <div key={label} style={{ ...s.card, borderTop: accent ? "3px solid var(--accent)" : "3px solid var(--border)" }}>
                   <div style={s.metricLabel}>{label}</div>
@@ -213,16 +216,16 @@ export default function DashboardClient({ token, userName }: { token: string; us
             {/* Tabela */}
             <div style={{ ...s.card, padding: 0, overflow: "hidden" }}>
               <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)" }}>
-                <p style={s.sectionTitle}>Banco de Dados Seguro</p>
+                <p style={s.sectionTitle}>{t.dashboard.tableTitle}</p>
               </div>
               {db.length === 0 ? (
                 <p style={{ padding: "32px 20px", color: "var(--text-muted)", fontSize: "0.85rem", textAlign: "center" }}>
-                  Nenhum registo ainda. Envie dados via <code style={{ fontFamily: "var(--font-geist-mono)", backgroundColor: "var(--bg-surface-2)", padding: "2px 6px", borderRadius: 4 }}>/api/v1/ingest</code>
+                  {t.dashboard.tableEmpty} <code style={{ fontFamily: "var(--font-geist-mono)", backgroundColor: "var(--bg-surface-2)", padding: "2px 6px", borderRadius: 4 }}>/api/v1/ingest</code>
                 </p>
               ) : (
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["Nome","Email","CPF"].map(h => <th key={h} style={{ ...s.tableHead, textAlign: "left" }}>{h}</th>)}</tr>
+                    <tr>{[t.dashboard.colName, t.dashboard.colEmail, t.dashboard.colCpf].map(h => <th key={h} style={{ ...s.tableHead, textAlign: "left" }}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {db.map((r, i) => (
@@ -241,31 +244,31 @@ export default function DashboardClient({ token, userName }: { token: string; us
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {queue.length === 0 ? (
               <div style={s.successBox}>
-                <p style={{ fontWeight: 600, fontSize: "0.95rem" }}>Fila limpa</p>
-                <p style={{ fontSize: "0.82rem", marginTop: 4, opacity: 0.8 }}>Nenhuma ação humana necessária.</p>
+                <p style={{ fontWeight: 600, fontSize: "0.95rem" }}>{t.dashboard.queueEmpty}</p>
+                <p style={{ fontSize: "0.82rem", marginTop: 4, opacity: 0.8 }}>{t.dashboard.queueEmptySub}</p>
               </div>
             ) : queue.map((item, i) => (
               <div key={i} style={s.alertCard}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                   <div>
-                    <span style={s.alertBadge}>Alerta #{i + 1}</span>
+                    <span style={s.alertBadge}>{t.dashboard.alertLabel} #{i + 1}</span>
                     <p style={{ fontWeight: 700, color: "var(--text-primary)", marginTop: 6, fontSize: "0.95rem" }}>{item.name}</p>
                   </div>
-                  <button onClick={() => handleExpurge(item.name)} style={s.expurgeBtn}>Expurgar (Art. 18)</button>
+                  <button onClick={() => handleExpurge(item.name)} style={s.expurgeBtn}>{t.dashboard.expurgeBtn}</button>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
                   <div style={s.hintBox}>
-                    <div style={s.hintLabel}>Email (hint)</div>
+                    <div style={s.hintLabel}>{t.dashboard.emailHint}</div>
                     <div style={s.hintValue}>{item.email_hint}</div>
                   </div>
                   <div style={s.hintBox}>
-                    <div style={s.hintLabel}>CPF (hint)</div>
+                    <div style={s.hintLabel}>{t.dashboard.cpfHint}</div>
                     <div style={s.hintValue}>{item.cpf_hint}</div>
                   </div>
                 </div>
                 {diagnoses[item.name]
-                  ? <div style={s.diagnoseBox}><strong>Claude: </strong>{diagnoses[item.name]}</div>
-                  : <button onClick={() => handleDiagnose(item.name)} style={s.diagnoseBtn}>Solicitar diagnóstico Claude →</button>
+                  ? <div style={s.diagnoseBox}><strong>{t.dashboard.claude}</strong>{diagnoses[item.name]}</div>
+                  : <button onClick={() => handleDiagnose(item.name)} style={s.diagnoseBtn}>{t.dashboard.diagnoseBtn}</button>
                 }
               </div>
             ))}
