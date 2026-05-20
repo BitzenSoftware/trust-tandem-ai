@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import anthropic
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Security, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
@@ -53,8 +53,15 @@ app = FastAPI(
     title="Trust & Tandem AI Gateway",
     description="API segura de ingestão de dados em conformidade com LGPD — Orquestração Humano-IA",
     version="1.0.0",
-    dependencies=[Depends(_auth)],
 )
+
+# Public route — no auth, used by Railway/Docker healthchecks
+@app.get("/health", include_in_schema=False)
+def health():
+    return {"status": "ok"}
+
+# All business routes require X-API-Key
+_router = APIRouter(prefix="/api/v1", dependencies=[Depends(_auth)])
 
 
 # --- SCHEMAS ---
@@ -97,8 +104,8 @@ _orquestrador = PainelOrquestracao()
 
 # --- ROTAS ---
 
-@app.post(
-    "/api/v1/ingest",
+@_router.post(
+    "/ingest",
     response_model=RespostaIngestao,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Ingere lote de clientes e separa anomalias para revisão humana",
@@ -118,8 +125,8 @@ def ingerir_dados(clientes: list[ClienteInput]):
     )
 
 
-@app.get(
-    "/api/v1/review-queue",
+@_router.get(
+    "/review-queue",
     response_model=list[RegistroRevisaoOut],
     summary="Lista registros aguardando intervenção humana (dados parciais por LGPD)",
 )
@@ -134,8 +141,8 @@ def listar_fila_revisao():
     ]
 
 
-@app.get(
-    "/api/v1/database",
+@_router.get(
+    "/database",
     response_model=list[RegistroMascaradoOut],
     summary="Retorna dados já mascarados e aprovados para persistência",
 )
@@ -143,8 +150,8 @@ def visualizar_banco_seguro():
     return _orquestrador.banco_limpo
 
 
-@app.post(
-    "/api/v1/resolve",
+@_router.post(
+    "/resolve",
     response_model=RespostaIngestao,
     summary="Submete correção humana para um registro da fila de revisão",
 )
@@ -161,8 +168,8 @@ def resolver_registro(cliente: ClienteInput):
     )
 
 
-@app.get(
-    "/api/v1/analyze/{name}",
+@_router.get(
+    "/analyze/{name}",
     response_model=DiagnosticoOut,
     summary="Solicita diagnóstico Claude para um registro da fila (via hints — sem dado bruto)",
 )
@@ -186,8 +193,8 @@ def analisar_registro(name: str):
     return DiagnosticoOut(name=name, diagnostico=diagnostico)
 
 
-@app.delete(
-    "/api/v1/review-queue/{name}",
+@_router.delete(
+    "/review-queue/{name}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Expurga um registro específico da fila de revisão (direito ao esquecimento LGPD)",
 )
@@ -200,11 +207,14 @@ def expurgar_registro(name: str):
         raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado na fila.")
 
 
-@app.delete(
-    "/api/v1/reset",
+@_router.delete(
+    "/reset",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Limpa o estado da sessão (útil para testes repetidos)",
 )
 def resetar_estado():
     _orquestrador.fila_revisao.clear()
     repository.clear()
+
+
+app.include_router(_router)
