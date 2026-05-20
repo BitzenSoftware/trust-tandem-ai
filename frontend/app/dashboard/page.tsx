@@ -4,10 +4,15 @@ import DashboardClient from "./DashboardClient";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
 
-  const token = (await supabase.auth.getSession()).data.session?.access_token ?? "";
+  // getSession reads the cookie directly — reliable for extracting access_token
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) redirect("/login");
 
-  return <DashboardClient token={token} userName={user.email ?? ""} />;
+  return (
+    <DashboardClient
+      token={session.access_token}
+      userName={session.user.email ?? ""}
+    />
+  );
 }
