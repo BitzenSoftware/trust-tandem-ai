@@ -45,16 +45,19 @@ export default function RegisterPage() {
     localStorage.setItem("theme", next);
   }
 
+  const [confirmed, setConfirmed] = useState(false);
+
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true); setError("");
     const supabase = createClient();
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email, password,
       options: { data: { company_name: company, tenant_id: crypto.randomUUID() } },
     });
     if (error) { setError(error.message); setLoading(false); }
-    else { router.push("/dashboard"); router.refresh(); }
+    else if (data.session) { router.push("/dashboard"); router.refresh(); }
+    else { setConfirmed(true); setLoading(false); }
   }
 
   const s = {
@@ -87,55 +90,71 @@ export default function RegisterPage() {
 
       <div style={s.card}>
         <div style={{ textAlign: "center", marginBottom: 8 }}>
-          <span style={s.badge}>🛡️ LGPD Compliant</span>
+          <span style={s.badge}>ðŸ›¡ï¸ LGPD Compliant</span>
           <h1 style={s.title}>Criar conta</h1>
-          <p style={s.subtitle}>Trust & Tandem AI — Governança de Dados</p>
+          <p style={s.subtitle}>Trust & Tandem AI â€” GovernanÃ§a de Dados</p>
         </div>
 
-        <form onSubmit={handleRegister} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <label style={s.label}>Nome da empresa</label>
-            <input
-              type="text" required value={company}
-              onChange={e => setCompany(e.target.value)}
-              style={s.input} placeholder="Bitzen Software"
-            />
+        {confirmed ? (
+          <div style={{ textAlign: "center", padding: "24px 0" }}>
+            <div style={{ fontSize: "2.5rem", marginBottom: 12 }}>ðŸ“§</div>
+            <p style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "1rem", marginBottom: 8 }}>Confirme seu email</p>
+            <p style={{ fontSize: "0.84rem", color: "var(--text-secondary)", lineHeight: 1.6 }}>
+              Enviamos um link de confirmaÃ§Ã£o para <strong>{email}</strong>.<br />
+              Clique no link para ativar sua conta e depois faÃ§a login.
+            </p>
+            <Link href="/login" style={{ ...s.btn, display: "inline-block", marginTop: 20, textDecoration: "none", textAlign: "center" as const, lineHeight: "2.4" }}>
+              Ir para o Login
+            </Link>
           </div>
+        ) : (
+          <form onSubmit={handleRegister} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <label style={s.label}>Nome da empresa</label>
+              <input
+                type="text" required value={company}
+                onChange={e => setCompany(e.target.value)}
+                style={s.input} placeholder="Bitzen Software"
+              />
+            </div>
 
-          <div style={s.divider}>
-            <div style={s.line} />
-            <span style={s.divText}>Dados de acesso</span>
-            <div style={s.line} />
-          </div>
+            <div style={s.divider}>
+              <div style={s.line} />
+              <span style={s.divText}>Dados de acesso</span>
+              <div style={s.line} />
+            </div>
 
-          <div>
-            <label style={s.label}>Email corporativo</label>
-            <input
-              type="email" required value={email}
-              onChange={e => setEmail(e.target.value)}
-              style={s.input} placeholder="voce@empresa.com"
-            />
-          </div>
-          <div>
-            <label style={s.label}>Senha</label>
-            <input
-              type="password" required minLength={6} value={password}
-              onChange={e => setPassword(e.target.value)}
-              style={s.input} placeholder="Mínimo 6 caracteres"
-            />
-          </div>
+            <div>
+              <label style={s.label}>Email corporativo</label>
+              <input
+                type="email" required value={email}
+                onChange={e => setEmail(e.target.value)}
+                style={s.input} placeholder="voce@empresa.com"
+              />
+            </div>
+            <div>
+              <label style={s.label}>Senha</label>
+              <input
+                type="password" required minLength={6} value={password}
+                onChange={e => setPassword(e.target.value)}
+                style={s.input} placeholder="MÃ­nimo 6 caracteres"
+              />
+            </div>
 
-          {error && <div style={s.error}>{error}</div>}
+            {error && <div style={s.error}>{error}</div>}
 
-          <button type="submit" disabled={loading} style={{ ...s.btn, opacity: loading ? 0.6 : 1, marginTop: 4 }}>
-            {loading ? "Criando conta..." : "Criar conta"}
-          </button>
-        </form>
+            <button type="submit" disabled={loading} style={{ ...s.btn, opacity: loading ? 0.6 : 1, marginTop: 4 }}>
+              {loading ? "Criando conta..." : "Criar conta"}
+            </button>
+          </form>
+        )}
 
-        <p style={s.footer}>
-          Já tem conta?{" "}
-          <Link href="/login" style={s.link}>Entrar</Link>
-        </p>
+        {!confirmed && (
+          <p style={s.footer}>
+            JÃ¡ tem conta?{" "}
+            <Link href="/login" style={s.link}>Entrar</Link>
+          </p>
+        )}
       </div>
     </div>
   );
