@@ -9,6 +9,7 @@ import jwt as pyjwt
 from typing import Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -88,6 +89,14 @@ app = FastAPI(
     version="2.0.0",
     docs_url=None if _API_KEY else "/docs",
     redoc_url=None if _API_KEY else "/redoc",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
