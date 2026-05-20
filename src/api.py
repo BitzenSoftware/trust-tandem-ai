@@ -49,10 +49,15 @@ def _call_claude(system: str, message: str) -> str:
     )
     return resp.content[0].text
 
+_docs_url = None if _API_KEY else "/docs"
+_redoc_url = None if _API_KEY else "/redoc"
+
 app = FastAPI(
     title="Trust & Tandem AI Gateway",
     description="API segura de ingestão de dados em conformidade com LGPD — Orquestração Humano-IA",
     version="1.0.0",
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
 )
 
 # Public route — no auth, used by Railway/Docker healthchecks
