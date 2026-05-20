@@ -1,19 +1,80 @@
 @import "tailwindcss";
 
+/* ── Light theme ── */
 :root {
   color-scheme: light;
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg-base:        #F0F4F8;
+  --bg-surface:     #FFFFFF;
+  --bg-surface-2:   #F8FAFC;
+  --border:         #E2E8F0;
+  --border-strong:  #CBD5E1;
+  --text-primary:   #0F172A;
+  --text-secondary: #475569;
+  --text-muted:     #94A3B8;
+  --accent:         #3B82F6;
+  --accent-hover:   #2563EB;
+  --accent-subtle:  #EFF6FF;
+  --accent-text:    #1D4ED8;
+  --success:        #10B981;
+  --success-subtle: #ECFDF5;
+  --success-text:   #065F46;
+  --danger:         #EF4444;
+  --danger-subtle:  #FEF2F2;
+  --danger-text:    #991B1B;
+  --warning:        #F59E0B;
+  --warning-subtle: #FFFBEB;
+  --warning-text:   #92400E;
+  --shadow-sm:      0 1px 3px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:      0 4px 12px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.04);
+  --shadow-lg:      0 12px 24px rgba(0,0,0,.10), 0 4px 8px rgba(0,0,0,.05);
 }
+
+/* ── Dark theme ── */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-base:        #070B14;
+  --bg-surface:     #0F1623;
+  --bg-surface-2:   #161E30;
+  --border:         #1E2A40;
+  --border-strong:  #2A3A55;
+  --text-primary:   #E2E8F0;
+  --text-secondary: #94A3B8;
+  --text-muted:     #475569;
+  --accent:         #60A5FA;
+  --accent-hover:   #93C5FD;
+  --accent-subtle:  #0C1F3D;
+  --accent-text:    #93C5FD;
+  --success:        #34D399;
+  --success-subtle: #022C22;
+  --success-text:   #6EE7B7;
+  --danger:         #F87171;
+  --danger-subtle:  #2D0C0C;
+  --danger-text:    #FCA5A5;
+  --warning:        #FBBF24;
+  --warning-subtle: #1C1500;
+  --warning-text:   #FDE68A;
+  --shadow-sm:      0 1px 3px rgba(0,0,0,.4);
+  --shadow-md:      0 4px 12px rgba(0,0,0,.5);
+  --shadow-lg:      0 12px 32px rgba(0,0,0,.6);
+}
+
+/* ── Base ── */
+*, *::before, *::after {
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+html { height: 100%; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  min-height: 100%;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
+/* ── Inputs always readable ── */
 input, textarea, select {
-  color: #111827 !important;
-  background-color: #ffffff !important;
-  color-scheme: light !important;
+  color: var(--text-primary) !important;
+  background-color: var(--bg-surface) !important;
 }
