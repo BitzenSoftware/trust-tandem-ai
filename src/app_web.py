@@ -25,8 +25,15 @@ if "diagnosticos" not in st.session_state:
 
 # --- dados da API ---
 try:
-    queue: list[dict] = requests.get(f"{API}/review-queue", headers=_HEADERS, timeout=5).json()
-    db: list[dict]    = requests.get(f"{API}/database",      headers=_HEADERS, timeout=5).json()
+    r_queue = requests.get(f"{API}/review-queue", headers=_HEADERS, timeout=10)
+    r_db    = requests.get(f"{API}/database",      headers=_HEADERS, timeout=10)
+
+    if r_queue.status_code == 401 or r_db.status_code == 401:
+        st.error("API Key inválida ou ausente. Configure a variável API_GATEWAY_KEY nas secrets do Streamlit Cloud.")
+        st.stop()
+
+    queue: list[dict] = r_queue.json() if isinstance(r_queue.json(), list) else []
+    db: list[dict]    = r_db.json()    if isinstance(r_db.json(),    list) else []
 except requests.exceptions.ConnectionError:
     st.error("API FastAPI offline. Execute: uvicorn src.api:app --reload")
     st.stop()
