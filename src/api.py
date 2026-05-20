@@ -29,10 +29,10 @@ _key_scheme  = APIKeyHeader(name="X-API-Key", auto_error=False)
 _startup_logger = __import__("logging").getLogger("uvicorn.error")
 if not _API_KEY:
     _startup_logger.warning(
-        "SEGURANÇA: API_GATEWAY_KEY não configurada — modo dev ativo."
+        "SEGURANÃ‡A: API_GATEWAY_KEY nÃ£o configurada â€” modo dev ativo."
     )
 else:
-    _startup_logger.info("API_GATEWAY_KEY configurada — autenticação ativa.")
+    _startup_logger.info("API_GATEWAY_KEY configurada â€” autenticaÃ§Ã£o ativa.")
 
 
 _SUPER_ADMIN_EMAIL = os.environ.get("SUPER_ADMIN_EMAIL", "bitzensoftware@bitzen.app")
@@ -54,9 +54,9 @@ def _get_tenant_id(
                 timeout=10,
             )
         except _req.RequestException:
-            raise HTTPException(status_code=503, detail="Não foi possível contactar o Supabase.")
+            raise HTTPException(status_code=503, detail="NÃ£o foi possÃ­vel contactar o Supabase.")
         if resp.status_code != 200:
-            raise HTTPException(status_code=401, detail=f"Token inválido ({resp.status_code}).")
+            raise HTTPException(status_code=401, detail=f"Token invÃ¡lido ({resp.status_code}).")
         user_data = resp.json()
         user_meta = user_data.get("user_metadata", {})
         email     = user_data.get("email", "")
@@ -67,16 +67,21 @@ def _get_tenant_id(
 
         tenant_id = user_meta.get("tenant_id")
         if not tenant_id:
-            raise HTTPException(status_code=403, detail="Tenant não configurado para este utilizador.")
+            raise HTTPException(status_code=403, detail="Tenant nÃ£o configurado para este utilizador.")
         return str(tenant_id)
 
-    if _API_KEY and api_key == _API_KEY:
-        return "default"
+    if api_key:
+        tenant_id = repository.validate_api_key(api_key)
+        if tenant_id:
+            return tenant_id
+        if _API_KEY and api_key == _API_KEY:
+            return "default"
+        raise HTTPException(status_code=401, detail="API Key invÃ¡lida.")
 
     if not _API_KEY:
         return "default"
 
-    raise HTTPException(status_code=401, detail="Autenticação necessária.")
+    raise HTTPException(status_code=401, detail="AutenticaÃ§Ã£o necessÃ¡ria.")
 
 
 _claude = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -101,7 +106,7 @@ def _get_painel(tenant_id: str = Depends(_get_tenant_id)) -> PainelOrquestracao:
 
 app = FastAPI(
     title="Trust & Tandem AI Gateway",
-    description="API segura de ingestão de dados em conformidade com LGPD — Orquestração Humano-IA",
+    description="API segura de ingestÃ£o de dados em conformidade com LGPD â€” OrquestraÃ§Ã£o Humano-IA",
     version="2.0.0",
     docs_url=None if _API_KEY else "/docs",
     redoc_url=None if _API_KEY else "/redoc",
@@ -127,7 +132,7 @@ _router = APIRouter(prefix="/api/v1", dependencies=[Depends(_get_tenant_id)])
 # --- SCHEMAS ---
 
 class ClienteInput(BaseModel):
-    name: str = Field(..., examples=["João Errado"])
+    name: str = Field(..., examples=["JoÃ£o Errado"])
     email: Optional[str] = Field(None, examples=["joao.silva.com"])
     cpf: Optional[str] = Field(None, examples=["123.ABC.789-XX"])
 
@@ -159,13 +164,34 @@ class DiagnosticoOut(BaseModel):
     diagnostico_motivo: str
 
 
+class ApiKeyCreate(BaseModel):
+    label: Optional[str] = None
+
+
+class ApiKeyOut(BaseModel):
+    id: int
+    label: Optional[str] = None
+    created_at: str
+    key: Optional[str] = None
+
+
+class WebhookIn(BaseModel):
+    url: str
+
+
+class WebhookOut(BaseModel):
+    url: str
+    secret: str
+    active: bool
+
+
 # --- ROTAS ---
 
 @_router.post("/ingest", response_model=RespostaIngestao, status_code=status.HTTP_202_ACCEPTED,
-              summary="Ingere lote de clientes e separa anomalias para revisão humana")
+              summary="Ingere lote de clientes e separa anomalias para revisÃ£o humana")
 def ingerir_dados(clientes: list[ClienteInput], painel: PainelOrquestracao = Depends(_get_painel)):
     if not clientes:
-        raise HTTPException(status_code=400, detail="A lista de clientes não pode estar vazia.")
+        raise HTTPException(status_code=400, detail="A lista de clientes nÃ£o pode estar vazia.")
     for cliente in clientes:
         painel.processar_registro(cliente.model_dump())
     return RespostaIngestao(
@@ -177,7 +203,7 @@ def ingerir_dados(clientes: list[ClienteInput], painel: PainelOrquestracao = Dep
 
 
 @_router.get("/review-queue", response_model=list[RegistroRevisaoOut],
-             summary="Lista registros aguardando intervenção humana")
+             summary="Lista registros aguardando intervenÃ§Ã£o humana")
 def listar_fila_revisao(painel: PainelOrquestracao = Depends(_get_painel)):
     return [
         RegistroRevisaoOut(
@@ -190,48 +216,96 @@ def listar_fila_revisao(painel: PainelOrquestracao = Depends(_get_painel)):
 
 
 @_router.get("/database", response_model=list[RegistroMascaradoOut],
-             summary="Retorna dados mascarados aprovados para persistência")
+             summary="Retorna dados mascarados aprovados para persistÃªncia")
 def visualizar_banco_seguro(painel: PainelOrquestracao = Depends(_get_painel)):
     return painel.banco_limpo
 
 
 @_router.post("/resolve", response_model=RespostaIngestao,
-              summary="Submete correção humana para um registro da fila")
+              summary="Submete correÃ§Ã£o humana para um registro da fila")
 def resolver_registro(cliente: ClienteInput, painel: PainelOrquestracao = Depends(_get_painel)):
+    before = len(painel.banco_limpo)
     painel.remover_da_fila(cliente.name)
     painel.processar_registro(cliente.model_dump())
+    after_records = painel.banco_limpo
+    if len(after_records) > before:
+        wh = repository.get_webhook(painel.tenant_id)
+        if wh and wh.get("active"):
+            repository.fire_webhook(wh["url"], wh["secret"], after_records[-1:])
     return RespostaIngestao(
         status="Resolvido",
         mensagem=f"Registro '{cliente.name}' reprocessado com dados corrigidos.",
-        registros_banco_limpo=len(painel.banco_limpo),
+        registros_banco_limpo=len(after_records),
         registros_fila_revisao=len(painel.fila_revisao),
     )
 
 
-_DIAGNOSIS_SYSTEM = """Você é um especialista em validação de dados cadastrais brasileiros (CPF, CNPJ, e-mail).
-Analise o registro abaixo e retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown, sem texto extra.
+@_router.post("/keys", response_model=ApiKeyOut, status_code=status.HTTP_201_CREATED,
+              summary="Gera nova API Key para este tenant")
+def criar_api_key(body: ApiKeyCreate, tenant_id: str = Depends(_get_tenant_id)):
+    plain, key_id, created_at = repository.create_api_key(tenant_id, body.label)
+    return ApiKeyOut(id=key_id, label=body.label, created_at=str(created_at), key=plain)
 
-Schema obrigatório (todos os campos são strings):
+
+@_router.get("/keys", response_model=list[ApiKeyOut],
+             summary="Lista API Keys do tenant")
+def listar_api_keys(tenant_id: str = Depends(_get_tenant_id)):
+    return [ApiKeyOut(**{**k, "key": None}) for k in repository.list_api_keys(tenant_id)]
+
+
+@_router.delete("/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT,
+                summary="Revoga uma API Key")
+def revogar_api_key(key_id: int, tenant_id: str = Depends(_get_tenant_id)):
+    if not repository.revoke_api_key(key_id, tenant_id):
+        raise HTTPException(status_code=404, detail="API Key nÃ£o encontrada.")
+
+
+@_router.post("/webhook", response_model=WebhookOut,
+              summary="Configura webhook de saÃ­da (upsert)")
+def configurar_webhook(body: WebhookIn, tenant_id: str = Depends(_get_tenant_id)):
+    secret = repository.save_webhook(tenant_id, body.url)
+    return WebhookOut(url=body.url, secret=secret, active=True)
+
+
+@_router.get("/webhook", response_model=WebhookOut,
+             summary="ObtÃ©m configuraÃ§Ã£o de webhook do tenant")
+def obter_webhook(tenant_id: str = Depends(_get_tenant_id)):
+    wh = repository.get_webhook(tenant_id)
+    if not wh:
+        raise HTTPException(status_code=404, detail="Nenhum webhook configurado.")
+    return WebhookOut(url=wh["url"], secret=wh["secret"], active=bool(wh.get("active", True)))
+
+
+@_router.delete("/webhook", status_code=status.HTTP_204_NO_CONTENT,
+                summary="Remove webhook do tenant")
+def remover_webhook(tenant_id: str = Depends(_get_tenant_id)):
+    repository.delete_webhook(tenant_id)
+
+
+_DIAGNOSIS_SYSTEM = """VocÃª Ã© um especialista em validaÃ§Ã£o de dados cadastrais brasileiros (CPF, CNPJ, e-mail).
+Analise o registro abaixo e retorne EXCLUSIVAMENTE um objeto JSON vÃ¡lido, sem markdown, sem texto extra.
+
+Schema obrigatÃ³rio (todos os campos sÃ£o strings):
 {
   "campo_afetado": "email" | "cpf" | "email_e_cpf",
   "valor_original": "<valor exato com o erro>",
   "valor_sugerido": "<valor corrigido>",
-  "diagnostico_motivo": "<explicação concisa do erro, máx. 2 linhas>"
+  "diagnostico_motivo": "<explicaÃ§Ã£o concisa do erro, mÃ¡x. 2 linhas>"
 }"""
 
 
 @_router.get("/analyze/{name}", response_model=DiagnosticoOut,
-             summary="Diagnóstico estruturado Claude para um registro da fila")
+             summary="DiagnÃ³stico estruturado Claude para um registro da fila")
 def analisar_registro(name: str, painel: PainelOrquestracao = Depends(_get_painel)):
     record = next((r for r in painel.fila_revisao if r["name"] == name), None)
     if not record:
-        raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado na fila.")
+        raise HTTPException(status_code=404, detail=f"Registro '{name}' nÃ£o encontrado na fila.")
 
     user_msg = (
         f"Nome: {record['name']}\n"
         f"Email: {record.get('email', '')}\n"
         f"CPF: {record.get('cpf', '')}\n\n"
-        "Identifique qual campo está inválido e retorne o JSON de diagnóstico."
+        "Identifique qual campo estÃ¡ invÃ¡lido e retorne o JSON de diagnÃ³stico."
     )
     raw = _call_claude(_DIAGNOSIS_SYSTEM, user_msg)
 
@@ -260,11 +334,11 @@ def analisar_registro(name: str, painel: PainelOrquestracao = Depends(_get_paine
 def expurgar_registro(name: str, painel: PainelOrquestracao = Depends(_get_painel)):
     deleted = painel.remover_da_fila(name)
     if deleted == 0:
-        raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado na fila.")
+        raise HTTPException(status_code=404, detail=f"Registro '{name}' nÃ£o encontrado na fila.")
 
 
 @_router.delete("/reset", status_code=status.HTTP_204_NO_CONTENT,
-                summary="Limpa o estado da sessão (útil para testes)")
+                summary="Limpa o estado da sessÃ£o (Ãºtil para testes)")
 def resetar_estado(painel: PainelOrquestracao = Depends(_get_painel)):
     painel.limpar_tudo()
 
