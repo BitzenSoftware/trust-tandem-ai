@@ -20,6 +20,13 @@ async function apiFetch(url: string, options: RequestInit = {}) {
   } catch (e) { clearTimeout(t); throw e; }
 }
 
+async function getFreshHeaders() {
+  const sb = createClient();
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return null;
+  return { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" };
+}
+
 function SunIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -62,8 +69,6 @@ export default function DashboardClient({ token, userName }: { token: string; us
     localStorage.setItem("theme", next);
   }
 
-  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     if (!loading) { setElapsed(0); return; }
@@ -73,6 +78,8 @@ export default function DashboardClient({ token, userName }: { token: string; us
 
   const fetchData = useCallback(async () => {
     setLoading(true); setError("");
+    const h = await getFreshHeaders();
+    if (!h) { router.push("/login"); return; }
     // Warm up Render (free tier sleeps; this health ping waits up to 55s)
     const wc = new AbortController();
     const wt = setTimeout(() => wc.abort(), 55000);
@@ -82,12 +89,15 @@ export default function DashboardClient({ token, userName }: { token: string; us
     // Now fetch data (server should be warm)
     try {
       const [dbRes, qRes] = await Promise.all([
-        apiFetch(`${API}/database`,     { headers }),
-        apiFetch(`${API}/review-queue`, { headers }),
+        apiFetch(`${API}/database`,     { headers: h }),
+        apiFetch(`${API}/review-queue`, { headers: h }),
       ]);
       if (dbRes.ok) setDb(await dbRes.json());
       else if (dbRes.status === 403) setError(t.dashboard.err403);
-      else if (dbRes.status === 401) setError(t.dashboard.err401);
+      else if (dbRes.status === 401) {
+        try { const b = await dbRes.clone().json(); setError(`${t.dashboard.err401} (${b.detail})`); }
+        catch { setError(t.dashboard.err401); }
+      }
       else setError(`${t.dashboard.errApi} ${dbRes.status}.`);
       if (qRes.ok) setQueue(await qRes.json());
     } catch (e: unknown) {
@@ -96,7 +106,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
       else
         setError(t.dashboard.errConn);
     } finally { setLoading(false); }
-  }, [token, t]);
+  }, [router, t]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -107,16 +117,20 @@ export default function DashboardClient({ token, userName }: { token: string; us
   }
 
   async function handleExpurge(name: string) {
+    const h = await getFreshHeaders();
+    if (!h) { router.push("/login"); return; }
     try {
-      await apiFetch(`${API}/review-queue/${encodeURIComponent(name)}`, { method: "DELETE", headers });
+      await apiFetch(`${API}/review-queue/${encodeURIComponent(name)}`, { method: "DELETE", headers: h });
       fetchData();
     } catch { setError(t.dashboard.expurgeError); }
   }
 
   async function handleDiagnose(name: string) {
     if (diagnoses[name]) return;
+    const h = await getFreshHeaders();
+    if (!h) { router.push("/login"); return; }
     try {
-      const res = await apiFetch(`${API}/analyze/${encodeURIComponent(name)}`, { headers });
+      const res = await apiFetch(`${API}/analyze/${encodeURIComponent(name)}`, { headers: h });
       if (res.ok) {
         const d = await res.json();
         setDiagnoses(p => ({ ...p, [name]: d.diagnostico }));
