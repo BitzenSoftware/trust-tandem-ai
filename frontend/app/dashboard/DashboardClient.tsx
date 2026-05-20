@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useTranslation, LangSelector } from "@/lib/i18n/context";
+import Papa from "papaparse";
 
 const API = process.env.NEXT_PUBLIC_API_URL + "/api/v1";
 
@@ -49,13 +50,21 @@ function MoonIcon() {
 export default function DashboardClient({ token, userName }: { token: string; userName: string }) {
   const router = useRouter();
   const { t } = useTranslation();
-  const [tab,       setTab]       = useState<"dashboard" | "queue">("dashboard");
+  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest">("dashboard");
   const [db,        setDb]        = useState<CleanRecord[]>([]);
   const [queue,     setQueue]     = useState<QueueItem[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState("");
   const [diagnoses, setDiagnoses] = useState<Record<string,string>>({});
   const [theme,     setTheme]     = useState<"light"|"dark">("light");
+  const [ingestMode,    setIngestMode]    = useState<"csv" | "manual">("csv");
+  const [csvData,       setCsvData]       = useState<Record<string, string>[]>([]);
+  const [csvColumns,    setCsvColumns]    = useState<string[]>([]);
+  const [isCsvValid,    setIsCsvValid]    = useState(false);
+  const [ingestLoading, setIngestLoading] = useState(false);
+  const [ingestResult,  setIngestResult]  = useState<{ total: number; clean: number; review: number } | null>(null);
+  const [ingestError,   setIngestError]   = useState("");
+  const [formRecord,    setFormRecord]    = useState({ name: "", email: "", cpf: "" });
 
   useEffect(() => {
     const saved = (localStorage.getItem("theme") || document.documentElement.getAttribute("data-theme") || "light") as "light"|"dark";
@@ -138,6 +147,45 @@ export default function DashboardClient({ token, userName }: { token: string; us
     } catch { setDiagnoses(p => ({ ...p, [name]: t.dashboard.claudeError })); }
   }
 
+  function handleFileUpload(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results: { data: Record<string, string>[]; meta: { fields?: string[] } }) => {
+        const columns = results.meta.fields ?? [];
+        const valid = ["name", "email", "cpf"].every(c => columns.includes(c));
+        setCsvColumns(columns);
+        setCsvData(results.data);
+        setIsCsvValid(valid);
+        setIngestResult(null);
+        setIngestError("");
+      },
+    });
+  }
+
+  async function submitIngestion(payload: Record<string, string>[]) {
+    setIngestLoading(true); setIngestError(""); setIngestResult(null);
+    const h = await getFreshHeaders();
+    if (!h) { router.push("/login"); return; }
+    try {
+      const res = await fetch(`${API}/ingest`, {
+        method: "POST", headers: h, body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIngestResult({ total: payload.length, clean: data.registros_banco_limpo, review: data.registros_fila_revisao });
+        setCsvData([]); setCsvColumns([]);
+        setFormRecord({ name: "", email: "", cpf: "" });
+        fetchData();
+      } else {
+        setIngestError(`Erro ${res.status}`);
+      }
+    } catch { setIngestError(t.dashboard.errConn); }
+    finally { setIngestLoading(false); }
+  }
+
   const conformidade = db.length + queue.length > 0
     ? ((db.length / (db.length + queue.length)) * 100).toFixed(1) : "100.0";
 
@@ -171,6 +219,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
     expurgeBtn:  { fontSize: "0.75rem", color: "var(--danger)", background: "none", border: "none", cursor: "pointer", fontWeight: 500 },
     retryBtn:    { marginTop: 10, fontSize: "0.82rem", color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 500 },
     badge:       { display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 20, height: 20, padding: "0 6px", backgroundColor: "var(--danger)", color: "#fff", borderRadius: 10, fontSize: "0.68rem", fontWeight: 700, marginLeft: 6 },
+    ingestLabel:      { display: "block", fontSize: "0.78rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6, letterSpacing: "0.01em" },
+    ingestInput:      { width: "100%", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", fontSize: "0.88rem", color: "var(--text-primary)", backgroundColor: "var(--bg-surface-2)", outline: "none", boxSizing: "border-box" as const },
+    ingestBtn:        { backgroundColor: "var(--accent)", color: "#fff", borderRadius: 10, padding: "11px 20px", fontSize: "0.88rem", fontWeight: 600, border: "none", cursor: "pointer", letterSpacing: "0.01em" },
+    ingestModeActive: { padding: "7px 16px", borderRadius: 8, backgroundColor: "var(--accent)", color: "#fff", border: "none", cursor: "pointer", fontSize: "0.82rem", fontWeight: 600 },
+    ingestModeInac:   { padding: "7px 16px", borderRadius: 8, backgroundColor: "var(--bg-surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)", cursor: "pointer", fontSize: "0.82rem", fontWeight: 500 },
+    dropzone:         { display: "block", padding: "48px 24px", border: "2px dashed var(--border)", borderRadius: 12, textAlign: "center" as const, cursor: "pointer", color: "var(--text-muted)", fontSize: "0.88rem", backgroundColor: "var(--bg-surface-2)" },
   };
 
   return (
@@ -197,17 +251,18 @@ export default function DashboardClient({ token, userName }: { token: string; us
       {/* Tabs */}
       <div style={s.nav}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", width: "100%" }}>
-          {(["dashboard","queue"] as const).map(tab_ => (
-            <button key={tab_} onClick={() => setTab(tab_)}
-              style={tab === tab_ ? s.tabActive : s.tabInactive}>
-              {tab_ === "dashboard" ? t.dashboard.tabDashboard : (
-                <span style={{ display: "flex", alignItems: "center" }}>
-                  {t.dashboard.tabQueue}
-                  {queue.length > 0 && <span style={s.badge}>{queue.length}</span>}
-                </span>
-              )}
+          <button onClick={() => setTab("dashboard")} style={tab === "dashboard" ? s.tabActive : s.tabInactive}>
+              {t.dashboard.tabDashboard}
             </button>
-          ))}
+            <button onClick={() => setTab("queue")} style={tab === "queue" ? s.tabActive : s.tabInactive}>
+              <span style={{ display: "flex", alignItems: "center" }}>
+                {t.dashboard.tabQueue}
+                {queue.length > 0 && <span style={s.badge}>{queue.length}</span>}
+              </span>
+            </button>
+            <button onClick={() => setTab("ingest")} style={tab === "ingest" ? s.tabActive : s.tabInactive}>
+              {t.ingest.tab}
+            </button>
         </div>
       </div>
 
@@ -270,7 +325,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
               )}
             </div>
           </>
-        ) : (
+        ) : tab === "queue" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {queue.length === 0 ? (
               <div style={s.successBox}>
@@ -302,6 +357,79 @@ export default function DashboardClient({ token, userName }: { token: string; us
                 }
               </div>
             ))}
+          </div>
+        ) : (
+          /* ── INGESTÃO DE DADOS ── */
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={ingestMode === "csv" ? s.ingestModeActive : s.ingestModeInac} onClick={() => setIngestMode("csv")}>{t.ingest.modeCSV}</button>
+              <button style={ingestMode === "manual" ? s.ingestModeActive : s.ingestModeInac} onClick={() => setIngestMode("manual")}>{t.ingest.modeManual}</button>
+            </div>
+
+            {ingestError && <div style={s.errorBox}><p style={{ fontSize: "0.85rem" }}>{ingestError}</p></div>}
+
+            {ingestMode === "csv" ? (
+              <div style={s.card}>
+                <label style={s.dropzone}>
+                  {t.ingest.dropzone}
+                  <input type="file" accept=".csv" onChange={handleFileUpload} style={{ display: "none" }} />
+                </label>
+                {csvData.length > 0 && (
+                  <div style={{ marginTop: 20 }}>
+                    <p style={{ fontSize: "0.82rem", fontWeight: 600, color: isCsvValid ? "var(--success-text)" : "var(--danger)", marginBottom: 8 }}>
+                      {isCsvValid ? `✅ ${t.ingest.columnsOk}` : `❌ ${t.ingest.columnsMissing}`}
+                    </p>
+                    <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: 12 }}>{csvData.length} {t.ingest.recordCount}</p>
+                    <div style={{ overflowX: "auto", marginBottom: 16 }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <thead><tr>{csvColumns.map(c => <th key={c} style={{ ...s.tableHead, textAlign: "left" }}>{c}</th>)}</tr></thead>
+                        <tbody>
+                          {csvData.slice(0, 5).map((row, i) => (
+                            <tr key={i}>{csvColumns.map(c => <td key={c} style={s.tableCell}>{row[c]}</td>)}</tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <button disabled={!isCsvValid || ingestLoading} onClick={() => submitIngestion(csvData)}
+                      style={{ ...s.ingestBtn, opacity: !isCsvValid || ingestLoading ? 0.6 : 1 }}>
+                      {ingestLoading ? t.ingest.processing : t.ingest.process}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={s.card}>
+                <form onSubmit={e => { e.preventDefault(); submitIngestion([formRecord]); }} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div>
+                    <label style={s.ingestLabel}>{t.ingest.fieldName}</label>
+                    <input required type="text" style={s.ingestInput} value={formRecord.name} onChange={e => setFormRecord({ ...formRecord, name: e.target.value })} />
+                  </div>
+                  <div>
+                    <label style={s.ingestLabel}>{t.ingest.fieldEmail}</label>
+                    <input type="email" style={s.ingestInput} value={formRecord.email} onChange={e => setFormRecord({ ...formRecord, email: e.target.value })} />
+                  </div>
+                  <div>
+                    <label style={s.ingestLabel}>{t.ingest.fieldCpf}</label>
+                    <input type="text" style={s.ingestInput} value={formRecord.cpf} onChange={e => setFormRecord({ ...formRecord, cpf: e.target.value })} />
+                  </div>
+                  <button type="submit" disabled={ingestLoading} style={{ ...s.ingestBtn, opacity: ingestLoading ? 0.6 : 1 }}>
+                    {ingestLoading ? t.ingest.processing : t.ingest.submit}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {ingestResult && (
+              <div style={{ ...s.card, backgroundColor: "var(--success-subtle)", border: "1px solid var(--success)" }}>
+                <p style={{ fontWeight: 700, fontSize: "0.95rem", color: "var(--success-text)", marginBottom: 8 }}>
+                  ✅ {ingestResult.total} {t.ingest.successBatch}
+                </p>
+                <ul style={{ fontSize: "0.85rem", color: "var(--success-text)", paddingLeft: 16, margin: 0 }}>
+                  <li>{ingestResult.clean} {t.ingest.clean}</li>
+                  <li>{ingestResult.review} {t.ingest.review}</li>
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </main>
