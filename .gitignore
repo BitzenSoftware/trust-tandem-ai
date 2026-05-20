@@ -13,7 +13,7 @@ venv/
 # Project outputs
 *.db
 output/
-.streamlit/
+.streamlit/credentials.toml
 
 # Windows user profile — exclude everything personal
 AppData/

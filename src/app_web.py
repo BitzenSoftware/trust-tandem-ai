@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 st.set_page_config(page_title="Trust & Tandem AI", page_icon="shield", layout="wide")
 
-API = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000") + "/api/v1"
+API = os.environ.get("API_BASE_URL", "https://trust-tandem-ai.onrender.com") + "/api/v1"
 _API_KEY = os.environ.get("API_GATEWAY_KEY", "")
 _HEADERS = {"X-API-Key": _API_KEY} if _API_KEY else {}
 
