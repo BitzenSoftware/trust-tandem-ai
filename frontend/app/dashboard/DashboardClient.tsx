@@ -64,8 +64,22 @@ export default function DashboardClient({ token, userName }: { token: string; us
 
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!loading) { setElapsed(0); return; }
+    const id = setInterval(() => setElapsed(n => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [loading]);
+
   const fetchData = useCallback(async () => {
     setLoading(true); setError("");
+    // Warm up Render (free tier sleeps; this health ping waits up to 55s)
+    const wc = new AbortController();
+    const wt = setTimeout(() => wc.abort(), 55000);
+    try { await fetch(`${process.env.NEXT_PUBLIC_API_URL}/health`, { signal: wc.signal }); }
+    catch { /* server still sleeping — will fail below with a clear error */ }
+    finally { clearTimeout(wt); }
+    // Now fetch data (server should be warm)
     try {
       const [dbRes, qRes] = await Promise.all([
         apiFetch(`${API}/database`,     { headers }),
@@ -188,7 +202,9 @@ export default function DashboardClient({ token, userName }: { token: string; us
         {loading ? (
           <div style={{ textAlign: "center", padding: "80px 0" }}>
             <div style={{ width: 36, height: 36, border: "3px solid var(--border)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
-            <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>{t.dashboard.loading}</p>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>
+              {elapsed >= 8 ? t.dashboard.warmingUp : t.dashboard.loading}
+            </p>
             <p style={{ color: "var(--text-muted)", fontSize: "0.78rem", marginTop: 6 }}>{t.dashboard.coldStart}</p>
           </div>
         ) : error ? (
@@ -199,7 +215,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
           </div>
         ) : tab === "dashboard" ? (
           <>
-            {/* MÃ©tricas */}
+            {/* Métricas */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 24 }}>
               {[
                 { label: t.dashboard.metricTotal,      value: db.length + queue.length, accent: false },
