@@ -32,6 +32,9 @@ else:
     _startup_logger.info("API_GATEWAY_KEY configurada — autenticação ativa.")
 
 
+_SUPER_ADMIN_EMAIL = os.environ.get("SUPER_ADMIN_EMAIL", "bitzensoftware@bitzen.app")
+
+
 def _get_tenant_id(
     creds: HTTPAuthorizationCredentials | None = Security(_bearer),
     api_key: str | None = Security(_key_scheme),
@@ -45,7 +48,13 @@ def _get_tenant_id(
                 creds.credentials, _JWT_SECRET,
                 algorithms=["HS256"], audience="authenticated",
             )
-            tenant_id = payload.get("user_metadata", {}).get("tenant_id")
+            user_meta = payload.get("user_metadata", {})
+
+            # Super admin: acesso irrestrito com tenant especial
+            if user_meta.get("is_super_admin") or payload.get("email") == _SUPER_ADMIN_EMAIL:
+                return "__admin__"
+
+            tenant_id = user_meta.get("tenant_id")
             if not tenant_id:
                 raise HTTPException(status_code=403, detail="Tenant não configurado para este utilizador.")
             return str(tenant_id)
