@@ -137,7 +137,7 @@ export const translations = {
       errConn: "NÃ£o foi possÃ­vel conectar Ã  API.",
     },
   },
-} as const;
+};
 
 export type Translations = typeof translations;
 export type T = (typeof translations)["en"];
