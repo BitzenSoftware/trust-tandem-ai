@@ -1,4 +1,3 @@
-import base64
 import os
 import sys
 from pathlib import Path
@@ -6,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import anthropic
-import jwt as pyjwt
+import requests as _req
 from typing import Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security, status
@@ -19,9 +18,9 @@ from app_orquestrador import PainelOrquestracao, _hint
 
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
 
-_JWT_SECRET     = os.environ.get("SUPABASE_JWT_SECRET", "")
-_JWT_SECRET_B64 = base64.b64decode(_JWT_SECRET + "==") if _JWT_SECRET else b""
-_API_KEY        = os.environ.get("API_GATEWAY_KEY", "")
+_SUPABASE_URL      = os.environ.get("SUPABASE_URL",      "https://szmxignwhckydwjmrwxs.supabase.co")
+_SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "sb_publishable_jA1KNrUNIWuwSKcK3bT1JQ_DzfmYS3B")
+_API_KEY           = os.environ.get("API_GATEWAY_KEY", "")
 _bearer      = HTTPBearer(auto_error=False)
 _key_scheme  = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -43,38 +42,31 @@ def _get_tenant_id(
 ) -> str:
     """Aceita Bearer JWT (Next.js) ou X-API-Key (Streamlit/legado)."""
     if creds:
-        if not _JWT_SECRET:
-            raise HTTPException(status_code=500, detail="SUPABASE_JWT_SECRET não configurado.")
         try:
-            try:
-                payload = pyjwt.decode(
-                    creds.credentials, _JWT_SECRET,
-                    algorithms=["HS256"], audience="authenticated",
-                )
-            except pyjwt.InvalidSignatureError:
-                # Supabase may use base64-decoded bytes as the actual HMAC key
-                payload = pyjwt.decode(
-                    creds.credentials, _JWT_SECRET_B64,
-                    algorithms=["HS256"], audience="authenticated",
-                )
-            user_meta = payload.get("user_metadata", {})
+            resp = _req.get(
+                f"{_SUPABASE_URL}/auth/v1/user",
+                headers={
+                    "Authorization": f"Bearer {creds.credentials}",
+                    "apikey": _SUPABASE_ANON_KEY,
+                },
+                timeout=10,
+            )
+        except _req.RequestException:
+            raise HTTPException(status_code=503, detail="Não foi possível contactar o Supabase.")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=401, detail=f"Token inválido ({resp.status_code}).")
+        user_data = resp.json()
+        user_meta = user_data.get("user_metadata", {})
+        email     = user_data.get("email", "")
 
-            # Super admin: acesso irrestrito com tenant especial
-            if user_meta.get("is_super_admin") or payload.get("email") == _SUPER_ADMIN_EMAIL:
-                return "__admin__"
+        # Super admin: acesso irrestrito com tenant especial
+        if user_meta.get("is_super_admin") or email == _SUPER_ADMIN_EMAIL:
+            return "__admin__"
 
-            tenant_id = user_meta.get("tenant_id")
-            if not tenant_id:
-                raise HTTPException(status_code=403, detail="Tenant não configurado para este utilizador.")
-            return str(tenant_id)
-        except pyjwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expirado.")
-        except pyjwt.InvalidAudienceError:
-            raise HTTPException(status_code=401, detail="Token: audiência inválida.")
-        except pyjwt.InvalidSignatureError:
-            raise HTTPException(status_code=401, detail="Token: assinatura inválida — verifique SUPABASE_JWT_SECRET no Render.")
-        except pyjwt.InvalidTokenError as e:
-            raise HTTPException(status_code=401, detail=f"Token inválido: {type(e).__name__}.")
+        tenant_id = user_meta.get("tenant_id")
+        if not tenant_id:
+            raise HTTPException(status_code=403, detail="Tenant não configurado para este utilizador.")
+        return str(tenant_id)
 
     if _API_KEY and api_key == _API_KEY:
         return "default"
