@@ -1,3 +1,4 @@
+import base64
 import os
 import sys
 from pathlib import Path
@@ -18,8 +19,9 @@ from app_orquestrador import PainelOrquestracao, _hint
 
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
 
-_JWT_SECRET  = os.environ.get("SUPABASE_JWT_SECRET", "")
-_API_KEY     = os.environ.get("API_GATEWAY_KEY", "")
+_JWT_SECRET     = os.environ.get("SUPABASE_JWT_SECRET", "")
+_JWT_SECRET_B64 = base64.b64decode(_JWT_SECRET + "==") if _JWT_SECRET else b""
+_API_KEY        = os.environ.get("API_GATEWAY_KEY", "")
 _bearer      = HTTPBearer(auto_error=False)
 _key_scheme  = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -44,10 +46,17 @@ def _get_tenant_id(
         if not _JWT_SECRET:
             raise HTTPException(status_code=500, detail="SUPABASE_JWT_SECRET não configurado.")
         try:
-            payload = pyjwt.decode(
-                creds.credentials, _JWT_SECRET,
-                algorithms=["HS256"], audience="authenticated",
-            )
+            try:
+                payload = pyjwt.decode(
+                    creds.credentials, _JWT_SECRET,
+                    algorithms=["HS256"], audience="authenticated",
+                )
+            except pyjwt.InvalidSignatureError:
+                # Supabase may use base64-decoded bytes as the actual HMAC key
+                payload = pyjwt.decode(
+                    creds.credentials, _JWT_SECRET_B64,
+                    algorithms=["HS256"], audience="authenticated",
+                )
             user_meta = payload.get("user_metadata", {})
 
             # Super admin: acesso irrestrito com tenant especial
@@ -60,8 +69,12 @@ def _get_tenant_id(
             return str(tenant_id)
         except pyjwt.ExpiredSignatureError:
             raise HTTPException(status_code=401, detail="Token expirado.")
-        except pyjwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Token inválido.")
+        except pyjwt.InvalidAudienceError:
+            raise HTTPException(status_code=401, detail="Token: audiência inválida.")
+        except pyjwt.InvalidSignatureError:
+            raise HTTPException(status_code=401, detail="Token: assinatura inválida — verifique SUPABASE_JWT_SECRET no Render.")
+        except pyjwt.InvalidTokenError as e:
+            raise HTTPException(status_code=401, detail=f"Token inválido: {type(e).__name__}.")
 
     if _API_KEY and api_key == _API_KEY:
         return "default"
