@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { useTranslation, LangSelector } from "@/lib/i18n/context";
 
 function SunIcon() {
   return (
@@ -26,6 +27,7 @@ function MoonIcon() {
 
 export default function LoginPage() {
   const router = useRouter();
+  const { t } = useTranslation();
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [error,    setError]    = useState("");
@@ -52,16 +54,16 @@ export default function LoginPage() {
     if (error) {
       const msg = error.message.toLowerCase();
       if (msg.includes("email not confirmed") || msg.includes("not confirmed"))
-        setError("Email nÃ£o confirmado. Verifique sua caixa de entrada e clique no link de confirmaÃ§Ã£o.");
+        setError(t.login.errorNotConfirmed);
       else
-        setError("Email ou senha incorretos.");
+        setError(t.login.errorInvalid);
       setLoading(false);
     } else { router.push("/dashboard"); router.refresh(); }
   }
 
   const s = {
     page:     { minHeight: "100vh", backgroundColor: "var(--bg-base)", display: "flex", flexDirection: "column" as const, alignItems: "center", justifyContent: "center", padding: 24 },
-    topbar:   { position: "fixed" as const, top: 16, right: 16 },
+    topbar:   { position: "fixed" as const, top: 16, right: 16, display: "flex", alignItems: "center", gap: 8 },
     themeBtn: { padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", backgroundColor: "var(--bg-surface)", color: "var(--text-secondary)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: "0.75rem", fontWeight: 500, boxShadow: "var(--shadow-sm)" },
     card:     { width: "100%", maxWidth: 400, backgroundColor: "var(--bg-surface)", borderRadius: 18, border: "1px solid var(--border)", boxShadow: "var(--shadow-lg)", padding: "40px 36px" },
     badge:    { display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 12px", backgroundColor: "var(--accent-subtle)", color: "var(--accent)", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600, letterSpacing: "0.04em", marginBottom: 20 },
@@ -78,6 +80,7 @@ export default function LoginPage() {
   return (
     <div style={s.page}>
       <div style={s.topbar}>
+        <LangSelector />
         <button onClick={toggleTheme} style={s.themeBtn}>
           {theme === "light" ? <MoonIcon /> : <SunIcon />}
           {theme === "light" ? "Dark" : "Light"}
@@ -86,14 +89,14 @@ export default function LoginPage() {
 
       <div style={s.card}>
         <div style={{ textAlign: "center", marginBottom: 8 }}>
-          <span style={s.badge}>ðŸ” Acesso Seguro</span>
-          <h1 style={s.title}>Trust & Tandem AI</h1>
-          <p style={s.subtitle}>GovernanÃ§a de Dados LGPD</p>
+          <span style={s.badge}>{t.login.badge}</span>
+          <h1 style={s.title}>{t.login.title}</h1>
+          <p style={s.subtitle}>{t.login.subtitle}</p>
         </div>
 
         <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div>
-            <label style={s.label}>Email</label>
+            <label style={s.label}>{t.login.email}</label>
             <input
               type="email" required value={email}
               onChange={e => setEmail(e.target.value)}
@@ -101,7 +104,7 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label style={s.label}>Senha</label>
+            <label style={s.label}>{t.login.password}</label>
             <input
               type="password" required value={password}
               onChange={e => setPassword(e.target.value)}
@@ -112,13 +115,13 @@ export default function LoginPage() {
           {error && <div style={s.error}>{error}</div>}
 
           <button type="submit" disabled={loading} style={{ ...s.btn, opacity: loading ? 0.6 : 1 }}>
-            {loading ? "Entrando..." : "Entrar"}
+            {loading ? t.login.submitting : t.login.submit}
           </button>
         </form>
 
         <p style={s.footer}>
-          NÃ£o tem conta?{" "}
-          <Link href="/register" style={s.link}>Criar conta</Link>
+          {t.login.noAccount}{" "}
+          <Link href="/register" style={s.link}>{t.login.register}</Link>
         </p>
       </div>
     </div>
