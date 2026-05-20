@@ -36,8 +36,8 @@ export function useTranslation() {
 }
 
 const LANGS: { code: Lang; label: string; flag: string }[] = [
-  { code: "pt-BR", label: "PortuguÃªs", flag: "ðŸ‡§ðŸ‡·" },
-  { code: "en",    label: "English",   flag: "ðŸ‡ºðŸ‡¸" },
+  { code: "pt-BR", label: "Português", flag: "🇧🇷" },
+  { code: "en",    label: "English",   flag: "🇺🇸" },
 ];
 
 export function LangSelector({ style }: { style?: React.CSSProperties }) {
@@ -75,7 +75,7 @@ export function LangSelector({ style }: { style?: React.CSSProperties }) {
       >
         <span>{current.flag}</span>
         <span>{current.label}</span>
-        <span style={{ opacity: 0.5, fontSize: "0.6rem" }}>â–¾</span>
+        <span style={{ opacity: 0.5, fontSize: "0.6rem" }}>▾</span>
       </button>
 
       {open && (
@@ -115,7 +115,7 @@ export function LangSelector({ style }: { style?: React.CSSProperties }) {
               <span>{l.flag}</span>
               <span style={{ flex: 1 }}>{l.label}</span>
               {lang === l.code && (
-                <span style={{ color: "var(--accent)", fontSize: "0.75rem" }}>âœ“</span>
+                <span style={{ color: "var(--accent)", fontSize: "0.75rem" }}>✓</span>
               )}
             </button>
           ))}
