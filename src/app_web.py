@@ -6,6 +6,22 @@ from urllib.parse import quote
 
 st.set_page_config(page_title="Trust & Tandem AI", page_icon="shield", layout="wide")
 
+# --- autenticação do painel ---
+_DASHBOARD_PWD = os.environ.get("DASHBOARD_PASSWORD", "")
+
+if _DASHBOARD_PWD:
+    if not st.session_state.get("autenticado"):
+        st.title("Trust & Tandem AI")
+        st.caption("Plataforma de Governança de Dados — Acesso Restrito")
+        pwd = st.text_input("Senha de acesso:", type="password")
+        if st.button("Entrar"):
+            if pwd == _DASHBOARD_PWD:
+                st.session_state.autenticado = True
+                st.rerun()
+            else:
+                st.error("Senha incorreta.")
+        st.stop()
+
 API = os.environ.get("API_BASE_URL", "https://trust-tandem-ai.onrender.com") + "/api/v1"
 _API_KEY = os.environ.get("API_GATEWAY_KEY", "")
 _HEADERS = {"X-API-Key": _API_KEY} if _API_KEY else {}
