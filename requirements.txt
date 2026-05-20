@@ -1,0 +1,9 @@
+anthropic
+fastapi
+uvicorn[standard]
+streamlit
+requests
+pandas
+pydantic
+pytest
+httpx

@@ -1,0 +1,60 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Project outputs
+*.db
+output/
+.streamlit/
+
+# Windows user profile — exclude everything personal
+AppData/
+Application Data/
+Contacts/
+Cookies/
+Desktop/
+Documents/
+Downloads/
+Favorites/
+IntelGraphicsProfiles/
+Links/
+Menu Iniciar/
+Modelos/
+Music/
+NetHood/
+OneDrive/
+OpenVPN/
+Os Meus Documentos/
+Pictures/
+PrintHood/
+Recent/
+Roaming/
+Saved Games/
+Searches/
+SendTo/
+Videos/
+WPS Cloud Files/
+Definições Locais/
+
+# Windows system files
+NTUSER.DAT*
+ntuser.dat*
+ntuser.ini
+*.TM.blf
+*.regtrans-ms
+
+# VS Code
+.vscode/
+
+# Misc
+*.log
+.DS_Store
+Thumbs.db

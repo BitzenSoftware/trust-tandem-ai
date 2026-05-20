@@ -1,0 +1,42 @@
+services:
+
+  api_gateway:
+    build: .
+    container_name: trust_tandem_api
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - data_volume:/app/output
+    networks:
+      - secure_network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/database')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  web_dashboard:
+    build: .
+    container_name: trust_tandem_web
+    restart: unless-stopped
+    command: streamlit run src/app_web.py --server.port=8501 --server.address=0.0.0.0
+    environment:
+      - API_BASE_URL=http://api_gateway:8000
+    env_file: .env
+    ports:
+      - "8501:8501"
+    networks:
+      - secure_network
+    depends_on:
+      api_gateway:
+        condition: service_healthy
+
+volumes:
+  data_volume:
+
+networks:
+  secure_network:
+    driver: bridge
