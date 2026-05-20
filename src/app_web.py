@@ -40,9 +40,10 @@ if "diagnosticos" not in st.session_state:
     st.session_state.diagnosticos = {}
 
 # --- dados da API ---
+_TIMEOUT_CONNECT = 30  # Render free tier pode ter cold start de até 60s
 try:
-    r_queue = requests.get(f"{API}/review-queue", headers=_HEADERS, timeout=10)
-    r_db    = requests.get(f"{API}/database",      headers=_HEADERS, timeout=10)
+    r_queue = requests.get(f"{API}/review-queue", headers=_HEADERS, timeout=_TIMEOUT_CONNECT)
+    r_db    = requests.get(f"{API}/database",      headers=_HEADERS, timeout=_TIMEOUT_CONNECT)
 
     if r_queue.status_code == 401 or r_db.status_code == 401:
         st.error("API Key inválida ou ausente. Configure a variável API_GATEWAY_KEY nas secrets do Streamlit Cloud.")
@@ -50,8 +51,13 @@ try:
 
     queue: list[dict] = r_queue.json() if isinstance(r_queue.json(), list) else []
     db: list[dict]    = r_db.json()    if isinstance(r_db.json(),    list) else []
+except requests.exceptions.Timeout:
+    st.warning("A API está demorando para responder (possível cold start). Aguarde alguns segundos e recarregue a página.")
+    st.info(f"Endpoint: {API}")
+    st.stop()
 except requests.exceptions.ConnectionError:
-    st.error("API FastAPI offline. Execute: uvicorn src.api:app --reload")
+    st.error("API FastAPI offline ou inacessível. Verifique se o serviço está ativo.")
+    st.info(f"Endpoint configurado: {API}")
     st.stop()
 
 total = len(queue) + len(db)
@@ -113,10 +119,15 @@ with tab_triagem:
             if name not in st.session_state.diagnosticos:
                 with c3:
                     with st.spinner("Claude analisando..."):
-                        resp = requests.get(f"{API}/analyze/{quote(name)}", headers=_HEADERS, timeout=30)
-                        st.session_state.diagnosticos[name] = (
-                            resp.json()["diagnostico"] if resp.ok else "Diagnóstico indisponível."
-                        )
+                        try:
+                            resp = requests.get(f"{API}/analyze/{quote(name)}", headers=_HEADERS, timeout=45)
+                            st.session_state.diagnosticos[name] = (
+                                resp.json()["diagnostico"] if resp.ok else "Diagnóstico indisponível."
+                            )
+                        except requests.exceptions.Timeout:
+                            st.session_state.diagnosticos[name] = "Tempo esgotado ao consultar Claude. Recarregue a página."
+                        except requests.exceptions.ConnectionError:
+                            st.session_state.diagnosticos[name] = "API inacessível. Verifique o serviço."
 
             c3.info(f"Diagnostico Claude: {st.session_state.diagnosticos[name]}")
 
