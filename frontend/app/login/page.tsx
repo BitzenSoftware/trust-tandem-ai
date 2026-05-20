@@ -49,8 +49,14 @@ export default function LoginPage() {
     setLoading(true); setError("");
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) { setError("Email ou senha incorretos."); setLoading(false); }
-    else { router.push("/dashboard"); router.refresh(); }
+    if (error) {
+      const msg = error.message.toLowerCase();
+      if (msg.includes("email not confirmed") || msg.includes("not confirmed"))
+        setError("Email nÃ£o confirmado. Verifique sua caixa de entrada e clique no link de confirmaÃ§Ã£o.");
+      else
+        setError("Email ou senha incorretos.");
+      setLoading(false);
+    } else { router.push("/dashboard"); router.refresh(); }
   }
 
   const s = {
@@ -80,9 +86,9 @@ export default function LoginPage() {
 
       <div style={s.card}>
         <div style={{ textAlign: "center", marginBottom: 8 }}>
-          <span style={s.badge}>🔐 Acesso Seguro</span>
+          <span style={s.badge}>ðŸ” Acesso Seguro</span>
           <h1 style={s.title}>Trust & Tandem AI</h1>
-          <p style={s.subtitle}>Governança de Dados LGPD</p>
+          <p style={s.subtitle}>GovernanÃ§a de Dados LGPD</p>
         </div>
 
         <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -99,7 +105,7 @@ export default function LoginPage() {
             <input
               type="password" required value={password}
               onChange={e => setPassword(e.target.value)}
-              style={s.input} placeholder="••••••••"
+              style={s.input} placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
             />
           </div>
 
@@ -111,7 +117,7 @@ export default function LoginPage() {
         </form>
 
         <p style={s.footer}>
-          Não tem conta?{" "}
+          NÃ£o tem conta?{" "}
           <Link href="/register" style={s.link}>Criar conta</Link>
         </p>
       </div>
