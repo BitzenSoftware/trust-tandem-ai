@@ -1,4 +1,6 @@
+import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -151,7 +153,10 @@ class RegistroRevisaoOut(BaseModel):
 
 class DiagnosticoOut(BaseModel):
     name: str
-    diagnostico: str
+    campo_afetado: str
+    valor_original: str
+    valor_sugerido: str
+    diagnostico_motivo: str
 
 
 # --- ROTAS ---
@@ -203,26 +208,51 @@ def resolver_registro(cliente: ClienteInput, painel: PainelOrquestracao = Depend
     )
 
 
+_DIAGNOSIS_SYSTEM = """Você é um especialista em validação de dados cadastrais brasileiros (CPF, CNPJ, e-mail).
+Analise o registro abaixo e retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown, sem texto extra.
+
+Schema obrigatório (todos os campos são strings):
+{
+  "campo_afetado": "email" | "cpf" | "email_e_cpf",
+  "valor_original": "<valor exato com o erro>",
+  "valor_sugerido": "<valor corrigido>",
+  "diagnostico_motivo": "<explicação concisa do erro, máx. 2 linhas>"
+}"""
+
+
 @_router.get("/analyze/{name}", response_model=DiagnosticoOut,
-             summary="Diagnóstico Claude para um registro da fila")
+             summary="Diagnóstico estruturado Claude para um registro da fila")
 def analisar_registro(name: str, painel: PainelOrquestracao = Depends(_get_painel)):
     record = next((r for r in painel.fila_revisao if r["name"] == name), None)
     if not record:
         raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado na fila.")
-    diagnostico = _call_claude(
-        _load_prompt("supervisor"),
-        (
-            f"Um registro está na fila de revisão por dados inválidos.\n\n"
-            f"Nome: {record['name']}\n"
-            f"Email (hint parcial): {_hint(str(record.get('email', '')))}\n"
-            f"CPF (hint parcial): {_hint(str(record.get('cpf', '')))}\n\n"
-            "Explique de forma concisa (máximo 3 linhas):\n"
-            "1. O que provavelmente está errado em cada campo\n"
-            "2. Qual formato correto é esperado\n"
-            "Não faça perguntas. Apenas diagnostique."
-        ),
+
+    user_msg = (
+        f"Nome: {record['name']}\n"
+        f"Email: {record.get('email', '')}\n"
+        f"CPF: {record.get('cpf', '')}\n\n"
+        "Identifique qual campo está inválido e retorne o JSON de diagnóstico."
     )
-    return DiagnosticoOut(name=name, diagnostico=diagnostico)
+    raw = _call_claude(_DIAGNOSIS_SYSTEM, user_msg)
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
+        data = json.loads(match.group()) if match else {
+            "campo_afetado": "desconhecido",
+            "valor_original": "",
+            "valor_sugerido": "",
+            "diagnostico_motivo": raw[:300],
+        }
+
+    return DiagnosticoOut(
+        name=name,
+        campo_afetado=data.get("campo_afetado", "desconhecido"),
+        valor_original=data.get("valor_original", ""),
+        valor_sugerido=data.get("valor_sugerido", ""),
+        diagnostico_motivo=data.get("diagnostico_motivo", ""),
+    )
 
 
 @_router.delete("/review-queue/{name}", status_code=status.HTTP_204_NO_CONTENT,
