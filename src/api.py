@@ -570,11 +570,31 @@ def obter_schema(tenant_id: str = Depends(_get_tenant_id)):
     return repository.get_tenant_schema(tenant_id)
 
 
+@_router.get("/plan", summary="Retorna o plano e limite de campos do tenant")
+def obter_plano(tenant_id: str = Depends(_get_tenant_id)):
+    plan = repository.get_tenant_plan(tenant_id)
+    limit = repository.PLAN_LIMITS.get(plan, 5)
+    count = repository.count_field_schemas(tenant_id)
+    return {"plan": plan, "field_limit": limit, "field_count": count}
+
+
 @_router.post("/schema/fields", status_code=status.HTTP_201_CREATED,
               summary="Adiciona ou actualiza um campo no schema do tenant")
 def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
     if body.field_key == "name":
         raise HTTPException(status_code=400, detail="O campo 'name' é reservado e não pode ser configurado.")
+    # Only new fields count against the plan limit — updates are always allowed
+    current_schema = repository.get_tenant_schema(tenant_id)
+    existing_keys = {f["field_key"] for f in current_schema}
+    if body.field_key not in existing_keys:
+        plan = repository.get_tenant_plan(tenant_id)
+        limit = repository.PLAN_LIMITS.get(plan, 5)
+        count = repository.count_field_schemas(tenant_id)
+        if count >= limit:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Limite do plano {plan.capitalize()} atingido ({count}/{limit} campos). Faça upgrade para adicionar mais campos.",
+            )
     repository.upsert_field_schema(tenant_id, {
         "field_key":        body.field_key,
         "label":            body.label,
