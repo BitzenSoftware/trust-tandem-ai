@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, ChangeEvent } from "react";
+import { useState, useEffect, useCallback, useRef, ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useTranslation, LangSelector } from "@/lib/i18n/context";
@@ -8,8 +8,20 @@ import Papa from "papaparse";
 
 const API = process.env.NEXT_PUBLIC_API_URL + "/api/v1";
 
-type CleanRecord = { name: string; email: string; cpf: string };
-type QueueItem   = { name: string; email_hint: string; cpf_hint: string };
+type CleanRecord    = { name: string; email: string; cpf: string };
+type QueueItem      = { name: string; email_hint: string; cpf_hint: string };
+type DiagnosisResult = {
+  campo_afetado: string;
+  valor_original: string;
+  valor_sugerido: string;
+  diagnostico_motivo: string;
+};
+
+type BulkLogEntry = {
+  name: string;
+  status: "analyzing" | "success" | "skipped" | "error";
+  detail?: string;
+};
 
 async function apiFetch(url: string, options: RequestInit = {}) {
   const ctrl = new AbortController();
@@ -50,12 +62,14 @@ function MoonIcon() {
 export default function DashboardClient({ token, userName }: { token: string; userName: string }) {
   const router = useRouter();
   const { t } = useTranslation();
-  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest">("dashboard");
+  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings">("dashboard");
   const [db,        setDb]        = useState<CleanRecord[]>([]);
   const [queue,     setQueue]     = useState<QueueItem[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState("");
-  const [diagnoses, setDiagnoses] = useState<Record<string,string>>({});
+  const [diagnoses,     setDiagnoses]     = useState<Record<string, DiagnosisResult>>({});
+  const [corrections,   setCorrections]   = useState<Record<string, { email: string; cpf: string }>>({});
+  const [approveLoading, setApproveLoading] = useState<Record<string, boolean>>({});
   const [theme,     setTheme]     = useState<"light"|"dark">("light");
   const [ingestMode,    setIngestMode]    = useState<"csv" | "manual">("csv");
   const [csvData,       setCsvData]       = useState<Record<string, string>[]>([]);
@@ -64,7 +78,27 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [ingestLoading, setIngestLoading] = useState(false);
   const [ingestResult,  setIngestResult]  = useState<{ total: number; clean: number; review: number } | null>(null);
   const [ingestError,   setIngestError]   = useState("");
+  const [ingestProgress, setIngestProgress] = useState<{ current: number; total: number; processed: number; totalRecords: number } | null>(null);
   const [formRecord,    setFormRecord]    = useState({ name: "", email: "", cpf: "" });
+  const [apiKeys,       setApiKeys]       = useState<{ id: number; label: string | null; created_at: string }[]>([]);
+  const [newKeyLabel,   setNewKeyLabel]   = useState("");
+  const [generatedKey,  setGeneratedKey]  = useState<string | null>(null);
+  const [keyLoading,    setKeyLoading]    = useState(false);
+  const [copiedKey,     setCopiedKey]     = useState(false);
+  const [webhookUrl,    setWebhookUrl]    = useState("");
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
+  const [webhookCurrent, setWebhookCurrent] = useState<{ url: string; secret: string; active: boolean } | null>(null);
+  const [webhookLoading, setWebhookLoading] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+
+  // ── Bulk approval state ──────────────────────────────────────────────────
+  const [selectedNames,  setSelectedNames]  = useState<string[]>([]);
+  const [bulkStep,       setBulkStep]       = useState<"idle" | "confirm" | "executing" | "completed">("idle");
+  const [bulkMode,       setBulkMode]       = useState<"auto" | "all">("auto");
+  const [bulkProgress,   setBulkProgress]   = useState({ current: 0, total: 0 });
+  const [bulkReport,     setBulkReport]     = useState({ approved: 0, skipped: 0, error: 0 });
+  const [bulkLog,        setBulkLog]        = useState<BulkLogEntry[]>([]);
+  const bulkCancelRef = useRef(false);
 
   useEffect(() => {
     const saved = (localStorage.getItem("theme") || document.documentElement.getAttribute("data-theme") || "light") as "light"|"dark";
@@ -119,6 +153,24 @@ export default function DashboardClient({ token, userName }: { token: string; us
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  const fetchSettings = useCallback(async () => {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    try {
+      const [keysRes, whRes] = await Promise.all([
+        apiFetch(`${API}/keys`, { headers: h }),
+        apiFetch(`${API}/webhook`, { headers: h }),
+      ]);
+      if (keysRes.ok) setApiKeys(await keysRes.json());
+      if (whRes.ok) {
+        const wh = await whRes.json();
+        setWebhookCurrent(wh);
+        setWebhookUrl(wh.url);
+      }
+    } catch { /* ignore */ }
+    finally { setSettingsLoaded(true); }
+  }, []);
+
   async function handleLogout() {
     const sb = createClient();
     await sb.auth.signOut();
@@ -142,9 +194,190 @@ export default function DashboardClient({ token, userName }: { token: string; us
       const res = await apiFetch(`${API}/analyze/${encodeURIComponent(name)}`, { headers: h });
       if (res.ok) {
         const d = await res.json();
-        setDiagnoses(p => ({ ...p, [name]: d.diagnostico }));
+        const diag: DiagnosisResult = d.campo_afetado
+          ? { campo_afetado: d.campo_afetado, valor_original: d.valor_original, valor_sugerido: d.valor_sugerido, diagnostico_motivo: d.diagnostico_motivo }
+          : { campo_afetado: "—", valor_original: "—", valor_sugerido: "—", diagnostico_motivo: d.diagnostico ?? t.dashboard.claudeError };
+        setDiagnoses(p => ({ ...p, [name]: diag }));
+        setCorrections(p => ({
+          ...p,
+          [name]: {
+            email: d.campo_afetado === "email" ? d.valor_sugerido : "",
+            cpf:   d.campo_afetado === "cpf"   ? d.valor_sugerido : "",
+          },
+        }));
       }
-    } catch { setDiagnoses(p => ({ ...p, [name]: t.dashboard.claudeError })); }
+    } catch {
+      setDiagnoses(p => ({
+        ...p,
+        [name]: { campo_afetado: "—", valor_original: "—", valor_sugerido: "—", diagnostico_motivo: t.dashboard.claudeError },
+      }));
+    }
+  }
+
+  async function handleApprove(name: string) {
+    const corr = corrections[name];
+    if (!corr) return;
+    setApproveLoading(p => ({ ...p, [name]: true }));
+    const h = await getFreshHeaders();
+    if (!h) { router.push("/login"); return; }
+    try {
+      await apiFetch(`${API}/resolve`, {
+        method: "POST", headers: h,
+        body: JSON.stringify({ name, email: corr.email || null, cpf: corr.cpf || null }),
+      });
+      setDiagnoses(p => { const c = { ...p }; delete c[name]; return c; });
+      setCorrections(p => { const c = { ...p }; delete c[name]; return c; });
+      fetchData();
+    } catch { /* user can retry */ }
+    finally { setApproveLoading(p => ({ ...p, [name]: false })); }
+  }
+
+  async function handleGenerateKey() {
+    setKeyLoading(true); setGeneratedKey(null);
+    const h = await getFreshHeaders();
+    if (!h) { setKeyLoading(false); return; }
+    try {
+      const res = await apiFetch(`${API}/keys`, {
+        method: "POST", headers: h,
+        body: JSON.stringify({ label: newKeyLabel || null }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setGeneratedKey(data.key);
+        setNewKeyLabel("");
+        fetchSettings();
+      }
+    } catch { /* ignore */ }
+    finally { setKeyLoading(false); }
+  }
+
+  async function handleRevokeKey(id: number) {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    await apiFetch(`${API}/keys/${id}`, { method: "DELETE", headers: h });
+    fetchSettings();
+  }
+
+  async function handleSaveWebhook() {
+    if (!webhookUrl) return;
+    setWebhookLoading(true); setWebhookSecret(null);
+    const h = await getFreshHeaders();
+    if (!h) { setWebhookLoading(false); return; }
+    try {
+      const res = await apiFetch(`${API}/webhook`, {
+        method: "POST", headers: h,
+        body: JSON.stringify({ url: webhookUrl }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWebhookCurrent(data);
+        setWebhookSecret(data.secret);
+      }
+    } catch { /* ignore */ }
+    finally { setWebhookLoading(false); }
+  }
+
+  async function handleBulkApprove(mode: "auto" | "all") {
+    setBulkMode(mode);
+    setBulkStep("executing");
+    bulkCancelRef.current = false;
+
+    const names = [...selectedNames];
+    setBulkProgress({ current: 0, total: names.length });
+    setBulkReport({ approved: 0, skipped: 0, error: 0 });
+    setBulkLog(names.map(n => ({ name: n, status: "analyzing" as const })));
+
+    const h = await getFreshHeaders();
+    if (!h) { router.push("/login"); return; }
+
+    let approved = 0, skipped = 0, errors = 0;
+
+    for (let i = 0; i < names.length; i++) {
+      if (bulkCancelRef.current) break;
+
+      const name = names[i];
+      setBulkProgress({ current: i + 1, total: names.length });
+
+      try {
+        // Reuse cached diagnosis if available from manual triage
+        let diag = diagnoses[name];
+        if (!diag) {
+          const diagRes = await apiFetch(`${API}/analyze/${encodeURIComponent(name)}`, { headers: h });
+          if (!diagRes.ok) throw new Error(`HTTP ${diagRes.status}`);
+          const d = await diagRes.json();
+          diag = {
+            campo_afetado:     d.campo_afetado     || "—",
+            valor_original:    d.valor_original    || "—",
+            valor_sugerido:    d.valor_sugerido    || "",
+            diagnostico_motivo: d.diagnostico_motivo || "",
+          };
+          setDiagnoses(p => ({ ...p, [name]: diag }));
+        }
+
+        const corrEmail = diag.campo_afetado === "email" ? diag.valor_sugerido : "";
+        const corrCpf   = diag.campo_afetado === "cpf"   ? diag.valor_sugerido : "";
+        const hasValidFix = diag.valor_sugerido && diag.valor_sugerido !== "—";
+
+        if (!hasValidFix && mode === "auto") {
+          skipped++;
+          setBulkLog(prev => prev.map(l => l.name === name
+            ? { ...l, status: "skipped", detail: "sem sugestão automática" } : l));
+          setBulkReport(r => ({ ...r, skipped: r.skipped + 1 }));
+          continue;
+        }
+
+        const resolveRes = await apiFetch(`${API}/resolve`, {
+          method: "POST", headers: h,
+          body: JSON.stringify({ name, email: corrEmail || null, cpf: corrCpf || null }),
+        });
+
+        if (resolveRes.ok) {
+          approved++;
+          setBulkLog(prev => prev.map(l => l.name === name
+            ? { ...l, status: "success", detail: `${diag.campo_afetado}: ${diag.valor_sugerido}` } : l));
+          setBulkReport(r => ({ ...r, approved: r.approved + 1 }));
+          // Remove from local diagnosis cache
+          setDiagnoses(p => { const c = { ...p }; delete c[name]; return c; });
+          setCorrections(p => { const c = { ...p }; delete c[name]; return c; });
+        } else {
+          errors++;
+          setBulkLog(prev => prev.map(l => l.name === name
+            ? { ...l, status: "error", detail: `HTTP ${resolveRes.status}` } : l));
+          setBulkReport(r => ({ ...r, error: r.error + 1 }));
+        }
+      } catch (e) {
+        errors++;
+        setBulkLog(prev => prev.map(l => l.name === name
+          ? { ...l, status: "error", detail: e instanceof Error ? e.message : "erro" } : l));
+        setBulkReport(r => ({ ...r, error: r.error + 1 }));
+      }
+    }
+
+    setBulkStep("completed");
+    setSelectedNames([]);
+    fetchData();
+  }
+
+  async function handleDeleteWebhook() {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    await apiFetch(`${API}/webhook`, { method: "DELETE", headers: h });
+    setWebhookCurrent(null); setWebhookUrl(""); setWebhookSecret(null);
+  }
+
+  function formatCpfCnpj(raw: string): string {
+    const d = raw.replace(/\D/g, "").slice(0, 14);
+    if (d.length <= 11) {
+      return d
+        .replace(/(\d{3})(\d)/, "$1.$2")
+        .replace(/(\d{3})(\d)/, "$1.$2")
+        .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
+    }
+    return d
+      .replace(/(\d{2})(\d)/, "$1.$2")
+      .replace(/(\d{3})(\d)/, "$1.$2")
+      .replace(/(\d{3})(\d)/, "$1/$2")
+      .replace(/(\d{4})(\d{1,2})$/, "$1-$2");
   }
 
   function handleFileUpload(e: ChangeEvent<HTMLInputElement>) {
@@ -165,25 +398,46 @@ export default function DashboardClient({ token, userName }: { token: string; us
     });
   }
 
+  const CHUNK_SIZE = 500;
+
   async function submitIngestion(payload: Record<string, string>[]) {
-    setIngestLoading(true); setIngestError(""); setIngestResult(null);
+    setIngestLoading(true); setIngestError(""); setIngestResult(null); setIngestProgress(null);
     const h = await getFreshHeaders();
     if (!h) { router.push("/login"); return; }
+
+    const chunks: Record<string, string>[][] = [];
+    for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
+      chunks.push(payload.slice(i, i + CHUNK_SIZE));
+    }
+
+    let lastClean = 0;
+    let lastReview = 0;
     try {
-      const res = await fetch(`${API}/ingest`, {
-        method: "POST", headers: h, body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setIngestResult({ total: payload.length, clean: data.registros_banco_limpo, review: data.registros_fila_revisao });
-        setCsvData([]); setCsvColumns([]);
-        setFormRecord({ name: "", email: "", cpf: "" });
-        fetchData();
-      } else {
-        setIngestError(`Erro ${res.status}`);
+      for (let i = 0; i < chunks.length; i++) {
+        setIngestProgress({
+          current: i + 1,
+          total: chunks.length,
+          processed: i * CHUNK_SIZE,
+          totalRecords: payload.length,
+        });
+        const res = await fetch(`${API}/ingest`, {
+          method: "POST", headers: h, body: JSON.stringify(chunks[i]),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          lastClean  = data.registros_banco_limpo;
+          lastReview = data.registros_fila_revisao;
+        } else {
+          setIngestError(`Erro ${res.status} no lote ${i + 1}/${chunks.length}`);
+          return;
+        }
       }
+      setIngestResult({ total: payload.length, clean: lastClean, review: lastReview });
+      setCsvData([]); setCsvColumns([]);
+      setFormRecord({ name: "", email: "", cpf: "" });
+      fetchData();
     } catch { setIngestError(t.dashboard.errConn); }
-    finally { setIngestLoading(false); }
+    finally { setIngestLoading(false); setIngestProgress(null); }
   }
 
   const conformidade = db.length + queue.length > 0
@@ -225,6 +479,19 @@ export default function DashboardClient({ token, userName }: { token: string; us
     ingestModeActive: { padding: "7px 16px", borderRadius: 8, backgroundColor: "var(--accent)", color: "#fff", border: "none", cursor: "pointer", fontSize: "0.82rem", fontWeight: 600 },
     ingestModeInac:   { padding: "7px 16px", borderRadius: 8, backgroundColor: "var(--bg-surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)", cursor: "pointer", fontSize: "0.82rem", fontWeight: 500 },
     dropzone:         { display: "block", padding: "48px 24px", border: "2px dashed var(--border)", borderRadius: 12, textAlign: "center" as const, cursor: "pointer", color: "var(--text-muted)", fontSize: "0.88rem", backgroundColor: "var(--bg-surface-2)" },
+    settingsCard:     { backgroundColor: "var(--bg-surface)", borderRadius: 14, border: "1px solid var(--border)", boxShadow: "var(--shadow-sm)", padding: "24px" },
+    settingsTitle:    { fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 4px 0" },
+    settingsDesc:     { fontSize: "0.8rem", color: "var(--text-muted)", margin: "0 0 16px 0" },
+    keyRow:           { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", backgroundColor: "var(--bg-surface-2)", borderRadius: 8, border: "1px solid var(--border)" },
+    keyMono:          { fontFamily: "var(--font-geist-mono)", fontSize: "0.8rem", color: "var(--text-secondary)", wordBreak: "break-all" as const, flex: 1 },
+    copyBtn:          { fontSize: "0.75rem", color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" as const, marginLeft: 8 },
+    revokeBtn:        { fontSize: "0.75rem", color: "var(--danger)", background: "none", border: "none", cursor: "pointer", fontWeight: 500, whiteSpace: "nowrap" as const },
+    secretHint:       { fontSize: "0.73rem", color: "var(--text-muted)", marginTop: 4, fontStyle: "italic" as const },
+    // Bulk approval
+    floatingToolbar:  { position: "fixed" as const, bottom: 28, left: "50%", transform: "translateX(-50%)", zIndex: 60, display: "flex", alignItems: "center", gap: 14, padding: "12px 22px", backgroundColor: "#0F172A", color: "#fff", borderRadius: 16, boxShadow: "0 8px 32px rgba(0,0,0,.45)", border: "1px solid rgba(255,255,255,.1)", whiteSpace: "nowrap" as const },
+    modalOverlay:     { position: "fixed" as const, inset: 0, backgroundColor: "rgba(0,0,0,.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 },
+    modalCard:        { backgroundColor: "var(--bg-surface)", borderRadius: 18, border: "1px solid var(--border)", boxShadow: "var(--shadow-lg)", padding: "32px", width: "100%", maxWidth: 560, maxHeight: "80vh", overflowY: "auto" as const },
+    bulkLogBox:       { maxHeight: 220, overflowY: "auto" as const, display: "flex", flexDirection: "column" as const, gap: 4, marginTop: 12, padding: "10px 14px", backgroundColor: "var(--bg-surface-2)", borderRadius: 10, border: "1px solid var(--border)" },
   };
 
   return (
@@ -262,6 +529,9 @@ export default function DashboardClient({ token, userName }: { token: string; us
             </button>
             <button onClick={() => setTab("ingest")} style={tab === "ingest" ? s.tabActive : s.tabInactive}>
               {t.ingest.tab}
+            </button>
+            <button onClick={() => { setTab("settings"); if (!settingsLoaded) fetchSettings(); }} style={tab === "settings" ? s.tabActive : s.tabInactive}>
+              {t.settings.tab}
             </button>
         </div>
       </div>
@@ -332,12 +602,42 @@ export default function DashboardClient({ token, userName }: { token: string; us
                 <p style={{ fontWeight: 600, fontSize: "0.95rem" }}>{t.dashboard.queueEmpty}</p>
                 <p style={{ fontSize: "0.82rem", marginTop: 4, opacity: 0.8 }}>{t.dashboard.queueEmptySub}</p>
               </div>
-            ) : queue.map((item, i) => (
-              <div key={i} style={s.alertCard}>
+            ) : (
+            <>
+              {/* Select-all toolbar */}
+              <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "6px 4px" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: "0.84rem", color: "var(--text-secondary)", fontWeight: 500, userSelect: "none" as const }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedNames.length === queue.length && queue.length > 0}
+                    onChange={e => setSelectedNames(e.target.checked ? queue.map(r => r.name) : [])}
+                    style={{ width: 16, height: 16, cursor: "pointer", accentColor: "var(--accent)" }}
+                  />
+                  {selectedNames.length === queue.length && queue.length > 0
+                    ? `${t.bulk.deselectAll} (${queue.length})`
+                    : `${t.bulk.selectAll} (${queue.length})`}
+                </label>
+                {selectedNames.length > 0 && (
+                  <span style={{ fontSize: "0.78rem", color: "var(--accent)", fontWeight: 700 }}>
+                    {selectedNames.length} {t.bulk.toolbarSelected}
+                  </span>
+                )}
+              </div>
+
+              {queue.map((item, i) => (
+              <div key={i} style={{ ...s.alertCard, outline: selectedNames.includes(item.name) ? "2px solid var(--accent)" : "2px solid transparent", transition: "outline 0.15s" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-                  <div>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedNames.includes(item.name)}
+                      onChange={e => setSelectedNames(prev => e.target.checked ? [...prev, item.name] : prev.filter(n => n !== item.name))}
+                      style={{ width: 16, height: 16, cursor: "pointer", marginTop: 4, accentColor: "var(--accent)", flexShrink: 0 }}
+                    />
+                    <div>
                     <span style={s.alertBadge}>{t.dashboard.alertLabel} #{i + 1}</span>
                     <p style={{ fontWeight: 700, color: "var(--text-primary)", marginTop: 6, fontSize: "0.95rem" }}>{item.name}</p>
+                    </div>
                   </div>
                   <button onClick={() => handleExpurge(item.name)} style={s.expurgeBtn}>{t.dashboard.expurgeBtn}</button>
                 </div>
@@ -351,14 +651,54 @@ export default function DashboardClient({ token, userName }: { token: string; us
                     <div style={s.hintValue}>{item.cpf_hint}</div>
                   </div>
                 </div>
-                {diagnoses[item.name]
-                  ? <div style={s.diagnoseBox}><strong>{t.dashboard.claude}</strong>{diagnoses[item.name]}</div>
-                  : <button onClick={() => handleDiagnose(item.name)} style={s.diagnoseBtn}>{t.dashboard.diagnoseBtn}</button>
-                }
+                {diagnoses[item.name] ? (
+                  <div>
+                    <div style={s.diagnoseBox}>
+                      <p style={{ fontSize: "0.8rem", fontWeight: 600, marginBottom: 4 }}>
+                        {t.dashboard.claude}
+                        <span style={{ fontWeight: 400 }}>{diagnoses[item.name].diagnostico_motivo}</span>
+                      </p>
+                      <p style={{ fontSize: "0.75rem", opacity: 0.85 }}>
+                        <strong>{t.dashboard.diagnoseField}:</strong>{" "}{diagnoses[item.name].campo_afetado}
+                        {"  "}<code style={{ backgroundColor: "var(--bg-surface)", padding: "1px 5px", borderRadius: 4 }}>{diagnoses[item.name].valor_original}</code>
+                        {" → "}<code style={{ backgroundColor: "var(--bg-surface)", padding: "1px 5px", borderRadius: 4 }}>{diagnoses[item.name].valor_sugerido}</code>
+                      </p>
+                    </div>
+                    <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div>
+                        <label style={s.ingestLabel}>{t.dashboard.corrEmail}</label>
+                        <input type="email" style={s.ingestInput}
+                          value={corrections[item.name]?.email ?? ""}
+                          onChange={e => setCorrections(p => ({ ...p, [item.name]: { ...p[item.name], email: e.target.value } }))}
+                        />
+                      </div>
+                      <div>
+                        <label style={s.ingestLabel}>{t.dashboard.corrCpf}</label>
+                        <input type="text" style={s.ingestInput}
+                          value={corrections[item.name]?.cpf ?? ""}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                            setCorrections(p => ({ ...p, [item.name]: { ...p[item.name], cpf: formatCpfCnpj(e.target.value) } }))
+                          }
+                        />
+                      </div>
+                      <button
+                        onClick={() => handleApprove(item.name)}
+                        disabled={approveLoading[item.name]}
+                        style={{ ...s.ingestBtn, fontSize: "0.82rem", opacity: approveLoading[item.name] ? 0.6 : 1 }}
+                      >
+                        {approveLoading[item.name] ? t.dashboard.approving : t.dashboard.approveBtn}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => handleDiagnose(item.name)} style={s.diagnoseBtn}>{t.dashboard.diagnoseBtn}</button>
+                )}
               </div>
             ))}
+            </>
+            )}
           </div>
-        ) : (
+        ) : tab === "ingest" ? (
           /* ── INGESTÃO DE DADOS ── */
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "flex", gap: 8 }}>
@@ -390,10 +730,31 @@ export default function DashboardClient({ token, userName }: { token: string; us
                         </tbody>
                       </table>
                     </div>
-                    <button disabled={!isCsvValid || ingestLoading} onClick={() => submitIngestion(csvData)}
-                      style={{ ...s.ingestBtn, opacity: !isCsvValid || ingestLoading ? 0.6 : 1 }}>
-                      {ingestLoading ? t.ingest.processing : t.ingest.process}
-                    </button>
+                    {ingestLoading && ingestProgress ? (
+                      <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", color: "var(--text-secondary)", marginBottom: 6 }}>
+                          <span>{t.ingest.batchLabel} {ingestProgress.current} {t.ingest.batchOf} {ingestProgress.total}</span>
+                          <span>{Math.min(ingestProgress.current * CHUNK_SIZE, ingestProgress.totalRecords).toLocaleString()} / {ingestProgress.totalRecords.toLocaleString()} {t.ingest.recordCount}</span>
+                        </div>
+                        <div style={{ height: 10, backgroundColor: "var(--bg-surface-2)", borderRadius: 6, overflow: "hidden", border: "1px solid var(--border)" }}>
+                          <div style={{
+                            height: "100%",
+                            width: `${Math.round((ingestProgress.current / ingestProgress.total) * 100)}%`,
+                            backgroundColor: "var(--accent)",
+                            borderRadius: 6,
+                            transition: "width 0.4s ease",
+                          }} />
+                        </div>
+                        <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: 6, textAlign: "center" }}>
+                          {Math.round((ingestProgress.current / ingestProgress.total) * 100)}% — {t.ingest.processing}
+                        </p>
+                      </div>
+                    ) : (
+                      <button disabled={!isCsvValid || ingestLoading} onClick={() => submitIngestion(csvData)}
+                        style={{ ...s.ingestBtn, opacity: !isCsvValid || ingestLoading ? 0.6 : 1 }}>
+                        {t.ingest.process}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -410,7 +771,15 @@ export default function DashboardClient({ token, userName }: { token: string; us
                   </div>
                   <div>
                     <label style={s.ingestLabel}>{t.ingest.fieldCpf}</label>
-                    <input type="text" style={s.ingestInput} value={formRecord.cpf} onChange={e => setFormRecord({ ...formRecord, cpf: e.target.value })} />
+                    <input
+                      type="text"
+                      style={s.ingestInput}
+                      value={formRecord.cpf}
+                      placeholder="000.000.000-00 ou 00.000.000/0000-00"
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setFormRecord({ ...formRecord, cpf: formatCpfCnpj(e.target.value) })
+                      }
+                    />
                   </div>
                   <button type="submit" disabled={ingestLoading} style={{ ...s.ingestBtn, opacity: ingestLoading ? 0.6 : 1 }}>
                     {ingestLoading ? t.ingest.processing : t.ingest.submit}
@@ -431,8 +800,267 @@ export default function DashboardClient({ token, userName }: { token: string; us
               </div>
             )}
           </div>
+        ) : (
+          /* ── SETTINGS ── */
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* API Keys */}
+            <div style={s.settingsCard}>
+              <p style={s.settingsTitle}>{t.settings.apiKeys}</p>
+              <p style={s.settingsDesc}>{t.settings.apiKeysDesc}</p>
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                <input
+                  type="text"
+                  placeholder={t.settings.keyLabelPlaceholder}
+                  value={newKeyLabel}
+                  onChange={e => setNewKeyLabel(e.target.value)}
+                  style={{ ...s.ingestInput, flex: 1 }}
+                />
+                <button onClick={handleGenerateKey} disabled={keyLoading}
+                  style={{ ...s.ingestBtn, opacity: keyLoading ? 0.6 : 1 }}>
+                  {keyLoading ? t.settings.saving : t.settings.generateKey}
+                </button>
+              </div>
+              {generatedKey && (
+                <div style={{ padding: "12px 14px", backgroundColor: "var(--success-subtle)", borderRadius: 8, border: "1px solid var(--success)", marginBottom: 16 }}>
+                  <p style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--success-text)", marginBottom: 8 }}>{t.settings.keyGenerated}</p>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={s.keyMono}>{generatedKey}</span>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(generatedKey); setCopiedKey(true); setTimeout(() => setCopiedKey(false), 2000); }}
+                      style={s.copyBtn}>
+                      {copiedKey ? t.settings.copied : t.settings.copyKey}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {apiKeys.length === 0 ? (
+                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>{t.settings.noKeys}</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {apiKeys.map(k => (
+                    <div key={k.id} style={s.keyRow}>
+                      <div>
+                        <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>{k.label || `Key #${k.id}`}</p>
+                        <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{k.created_at}</p>
+                      </div>
+                      <button onClick={() => handleRevokeKey(k.id)} style={s.revokeBtn}>{t.settings.revokeKey}</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Webhook */}
+            <div style={s.settingsCard}>
+              <p style={s.settingsTitle}>{t.settings.webhookTitle}</p>
+              <p style={s.settingsDesc}>{t.settings.webhookDesc}</p>
+              {webhookCurrent && (
+                <div style={{ padding: "12px 14px", backgroundColor: "var(--bg-surface-2)", borderRadius: 8, border: "1px solid var(--border)", marginBottom: 16 }}>
+                  <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 4 }}>{webhookCurrent.url}</p>
+                  <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: 2 }}>
+                    {t.settings.webhookSecret}: <code style={{ fontFamily: "var(--font-geist-mono)", fontSize: "0.72rem" }}>{webhookCurrent.secret.slice(0, 16)}…</code>
+                  </p>
+                  <p style={s.secretHint}>{t.settings.webhookSecretHint}</p>
+                  <button onClick={handleDeleteWebhook} style={{ ...s.revokeBtn, marginTop: 8 }}>{t.settings.deleteWebhook}</button>
+                </div>
+              )}
+              {webhookSecret && (
+                <div style={{ padding: "12px 14px", backgroundColor: "var(--success-subtle)", borderRadius: 8, border: "1px solid var(--success)", marginBottom: 16 }}>
+                  <p style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--success-text)", marginBottom: 4 }}>{t.settings.webhookSecret}</p>
+                  <span style={{ ...s.keyMono, color: "var(--success-text)" }}>{webhookSecret}</span>
+                  <p style={{ ...s.secretHint, color: "var(--success-text)" }}>{t.settings.webhookSecretHint}</p>
+                </div>
+              )}
+              {!webhookCurrent && !webhookSecret && (
+                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: 12 }}>{t.settings.webhookNone}</p>
+              )}
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="url"
+                  placeholder={t.settings.webhookUrlPlaceholder}
+                  value={webhookUrl}
+                  onChange={e => setWebhookUrl(e.target.value)}
+                  style={{ ...s.ingestInput, flex: 1 }}
+                />
+                <button onClick={handleSaveWebhook} disabled={webhookLoading || !webhookUrl}
+                  style={{ ...s.ingestBtn, opacity: webhookLoading || !webhookUrl ? 0.6 : 1 }}>
+                  {webhookLoading ? t.settings.saving : t.settings.saveWebhook}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </main>
+
+      {/* ── FLOATING TOOLBAR ──────────────────────────────────────────────── */}
+      {selectedNames.length > 0 && bulkStep === "idle" && (
+        <div style={s.floatingToolbar}>
+          <span style={{ fontSize: "0.88rem", fontWeight: 600 }}>
+            {selectedNames.length} {t.bulk.toolbarSelected}
+          </span>
+          <button
+            onClick={() => setBulkStep("confirm")}
+            style={{ padding: "8px 20px", backgroundColor: "var(--accent)", color: "#fff", borderRadius: 10, border: "none", cursor: "pointer", fontSize: "0.85rem", fontWeight: 700 }}
+          >
+            ▶ {t.bulk.btnAgent}
+          </button>
+          <button
+            onClick={() => setSelectedNames([])}
+            style={{ background: "none", border: "none", color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "1rem", lineHeight: 1 }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ── BULK MODAL ────────────────────────────────────────────────────── */}
+      {(bulkStep === "confirm" || bulkStep === "executing" || bulkStep === "completed") && (
+        <div style={s.modalOverlay}>
+          <div style={s.modalCard}>
+
+            {/* ── CONFIRM ── */}
+            {bulkStep === "confirm" && (
+              <>
+                <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: 6, letterSpacing: "-0.02em" }}>
+                  🤖 {t.bulk.modalTitle}
+                </h2>
+                <p style={{ fontSize: "0.88rem", color: "var(--text-secondary)", marginBottom: 24 }}>
+                  <strong style={{ color: "var(--accent)", fontSize: "1.3rem" }}>{selectedNames.length}</strong>{" "}
+                  {t.bulk.confirmSubtitle}
+                </p>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <button
+                    onClick={() => handleBulkApprove("auto")}
+                    style={{ ...s.ingestBtn, textAlign: "left", padding: "14px 18px" }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 2 }}>✅ {t.bulk.btnOnlyAuto}</div>
+                    <div style={{ fontSize: "0.75rem", opacity: 0.8, fontWeight: 400 }}>
+                      Registros sem sugestão válida são pulados automaticamente
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleBulkApprove("all")}
+                    style={{ ...s.ingestBtn, backgroundColor: "var(--warning)", textAlign: "left", padding: "14px 18px" }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 2 }}>⚠️ {t.bulk.btnProcessAll}</div>
+                    <div style={{ fontSize: "0.75rem", opacity: 0.8, fontWeight: 400 }}>
+                      Dados em falta serão aprovados com campos nulos
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setBulkStep("idle")}
+                    style={{ padding: "11px 0", borderRadius: 10, border: "1px solid var(--border)", backgroundColor: "transparent", color: "var(--text-secondary)", cursor: "pointer", fontSize: "0.86rem", fontWeight: 500 }}
+                  >
+                    {t.bulk.btnCancel}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* ── EXECUTING ── */}
+            {bulkStep === "executing" && (
+              <>
+                <h2 style={{ fontSize: "1.05rem", fontWeight: 700, marginBottom: 4 }}>
+                  🔄 {t.bulk.processingTitle}
+                </h2>
+                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: 20 }}>
+                  {bulkMode === "auto" ? t.bulk.btnOnlyAuto : t.bulk.btnProcessAll}
+                </p>
+
+                {/* Progress bar */}
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", color: "var(--text-secondary)", marginBottom: 6 }}>
+                    <span>{bulkProgress.current} / {bulkProgress.total}</span>
+                    <span>{bulkProgress.total > 0 ? Math.round((bulkProgress.current / bulkProgress.total) * 100) : 0}%</span>
+                  </div>
+                  <div style={{ height: 10, backgroundColor: "var(--bg-surface-2)", borderRadius: 6, overflow: "hidden", border: "1px solid var(--border)" }}>
+                    <div style={{
+                      height: "100%",
+                      width: `${bulkProgress.total > 0 ? Math.round((bulkProgress.current / bulkProgress.total) * 100) : 0}%`,
+                      backgroundColor: "var(--accent)",
+                      borderRadius: 6,
+                      transition: "width 0.35s ease",
+                    }} />
+                  </div>
+                  <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: "0.73rem" }}>
+                    <span style={{ color: "var(--success-text)" }}>✅ {bulkReport.approved} {t.bulk.statusSuccess}</span>
+                    <span style={{ color: "var(--warning-text)" }}>⏭️ {bulkReport.skipped} {t.bulk.statusSkipped}</span>
+                    <span style={{ color: "var(--danger-text)" }}>❌ {bulkReport.error} {t.bulk.statusError}</span>
+                  </div>
+                </div>
+
+                {/* Live log */}
+                <div style={s.bulkLogBox}>
+                  {bulkLog.slice(-12).map(entry => (
+                    <div key={entry.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.76rem", padding: "2px 0" }}>
+                      <span style={{ flexShrink: 0 }}>
+                        {entry.status === "success"   ? "✅" :
+                         entry.status === "error"     ? "❌" :
+                         entry.status === "skipped"   ? "⏭️" : "🔄"}
+                      </span>
+                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, color: "var(--text-primary)", fontWeight: 500 }}>
+                        {entry.name}
+                      </span>
+                      <span style={{ color: "var(--text-muted)", fontSize: "0.68rem", flexShrink: 0 }}>
+                        {entry.status === "analyzing" ? t.bulk.statusAnalyzing :
+                         entry.status === "success"   ? (entry.detail || t.bulk.statusSuccess) :
+                         entry.status === "skipped"   ? t.bulk.statusSkipped :
+                         (entry.detail || t.bulk.statusError)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  onClick={() => { bulkCancelRef.current = true; }}
+                  style={{ marginTop: 16, width: "100%", padding: "9px 0", borderRadius: 10, border: "1px solid var(--border)", backgroundColor: "transparent", color: "var(--danger)", cursor: "pointer", fontSize: "0.84rem", fontWeight: 600 }}
+                >
+                  {t.bulk.btnCancel}
+                </button>
+              </>
+            )}
+
+            {/* ── COMPLETED ── */}
+            {bulkStep === "completed" && (
+              <>
+                <div style={{ textAlign: "center", marginBottom: 24 }}>
+                  <div style={{ fontSize: "2.5rem", marginBottom: 8 }}>🎉</div>
+                  <h2 style={{ fontSize: "1.1rem", fontWeight: 700, letterSpacing: "-0.02em" }}>{t.bulk.reportTitle}</h2>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+                  {[
+                    { value: bulkReport.approved, label: t.bulk.reportApproved, color: "var(--success)", bg: "var(--success-subtle)", icon: "✅" },
+                    { value: bulkReport.skipped,  label: t.bulk.reportSkipped,  color: "var(--warning-text)", bg: "var(--warning-subtle)", icon: "⏭️" },
+                    { value: bulkReport.error,    label: t.bulk.reportError,    color: "var(--danger-text)", bg: "var(--danger-subtle)", icon: "❌" },
+                  ].map(row => (
+                    <div key={row.label} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", backgroundColor: row.bg, borderRadius: 10 }}>
+                      <span style={{ fontSize: "1.2rem" }}>{row.icon}</span>
+                      <span style={{ fontSize: "1.4rem", fontWeight: 800, color: row.color, minWidth: 32 }}>{row.value}</span>
+                      <span style={{ fontSize: "0.83rem", color: row.color }}>{row.label}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {bulkReport.approved > 0 && (
+                  <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", textAlign: "center", marginBottom: 16 }}>
+                    🔗 {bulkReport.approved} {t.bulk.webhooksFired}
+                  </p>
+                )}
+
+                <button
+                  onClick={() => setBulkStep("idle")}
+                  style={{ ...s.ingestBtn, width: "100%", textAlign: "center" }}
+                >
+                  {t.bulk.btnClose}
+                </button>
+              </>
+            )}
+
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
