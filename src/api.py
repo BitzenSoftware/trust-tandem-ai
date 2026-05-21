@@ -2,7 +2,10 @@ import json
 import os
 import re
 import sys
+import time
+from collections import defaultdict, deque
 from pathlib import Path
+from threading import Lock
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -103,6 +106,38 @@ def _call_claude(system: str, message: str) -> str:
 
 def _get_painel(tenant_id: str = Depends(_get_tenant_id)) -> PainelOrquestracao:
     return PainelOrquestracao(tenant_id=tenant_id)
+
+
+class _TenantRateLimiter:
+    """Sliding-window in-memory rate limiter per tenant_id."""
+
+    def __init__(self, max_requests: int = 20, window_seconds: int = 60):
+        self._max = max_requests
+        self._window = window_seconds
+        self._buckets: dict[str, deque] = defaultdict(deque)
+        self._lock = Lock()
+
+    def check(self, tenant_id: str) -> None:
+        now = time.monotonic()
+        cutoff = now - self._window
+        with self._lock:
+            dq = self._buckets[tenant_id]
+            while dq and dq[0] < cutoff:
+                dq.popleft()
+            if len(dq) >= self._max:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit: máximo {self._max} requisições por {self._window}s por tenant.",
+                    headers={"Retry-After": str(self._window)},
+                )
+            dq.append(now)
+
+
+_rate_limiter = _TenantRateLimiter(max_requests=20, window_seconds=60)
+
+
+def _rate_limit(tenant_id: str = Depends(_get_tenant_id)) -> None:
+    _rate_limiter.check(tenant_id)
 
 
 app = FastAPI(
@@ -215,7 +250,8 @@ class BulkResolveReport(BaseModel):
 # --- ROTAS ---
 
 @_router.post("/ingest", response_model=RespostaIngestao, status_code=status.HTTP_202_ACCEPTED,
-              summary="Ingere lote de clientes e separa anomalias para revisão humana")
+              summary="Ingere lote de clientes e separa anomalias para revisão humana",
+              dependencies=[Depends(_rate_limit)])
 def ingerir_dados(clientes: list[ClienteInput], painel: PainelOrquestracao = Depends(_get_painel)):
     if not clientes:
         raise HTTPException(status_code=400, detail="A lista de clientes não pode estar vazia.")
@@ -385,7 +421,8 @@ Schema obrigatório (todos os campos são strings):
 }"""
 
 
-@_router.get("/analyze/{name}", summary="Diagnóstico estruturado Claude para um registro da fila")
+@_router.get("/analyze/{name}", summary="Diagnóstico estruturado Claude para um registro da fila",
+             dependencies=[Depends(_rate_limit)])
 def analisar_registro(name: str, painel: PainelOrquestracao = Depends(_get_painel)):
     record = next((r for r in painel.fila_revisao if r["name"] == name), None)
     if not record:
@@ -426,6 +463,15 @@ def expurgar_registro(name: str, painel: PainelOrquestracao = Depends(_get_paine
     deleted = painel.remover_da_fila(name)
     if deleted == 0:
         raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado na fila.")
+
+
+@_router.delete("/admin/purge-expired",
+                summary="LGPD Art. 15 — expurga registros da fila sem ação há mais de N dias")
+def purgar_expirados(days: int = 30, tenant_id: str = Depends(_get_tenant_id)):
+    # Super-admin purges all tenants; regular tenant purges only their own records.
+    scope = None if tenant_id == "__admin__" else tenant_id
+    deleted = repository.purge_expired_queue(tenant_id=scope, days=days)
+    return {"deleted": deleted, "days": days, "scope": scope or "all"}
 
 
 @_router.delete("/reset", status_code=status.HTTP_204_NO_CONTENT,
