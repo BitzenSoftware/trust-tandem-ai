@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback, useRef, ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
@@ -62,7 +62,7 @@ function MoonIcon() {
 export default function DashboardClient({ token, userName }: { token: string; userName: string }) {
   const router = useRouter();
   const { t } = useTranslation();
-  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings">("dashboard");
+  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "audit">("dashboard");
   const [db,        setDb]        = useState<CleanRecord[]>([]);
   const [queue,     setQueue]     = useState<QueueItem[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -198,11 +198,14 @@ export default function DashboardClient({ token, userName }: { token: string; us
           ? { campo_afetado: d.campo_afetado, valor_original: d.valor_original, valor_sugerido: d.valor_sugerido, diagnostico_motivo: d.diagnostico_motivo }
           : { campo_afetado: "—", valor_original: "—", valor_sugerido: "—", diagnostico_motivo: d.diagnostico ?? t.dashboard.claudeError };
         setDiagnoses(p => ({ ...p, [name]: diag }));
+        // Pre-fill correction fields with AI suggestion where applicable
+        const sugg = d.valor_sugerido && d.valor_sugerido !== "—" && d.valor_sugerido !== "None"
+          ? d.valor_sugerido : "";
         setCorrections(p => ({
           ...p,
           [name]: {
-            email: d.campo_afetado === "email" ? d.valor_sugerido : "",
-            cpf:   d.campo_afetado === "cpf"   ? d.valor_sugerido : "",
+            email: (d.campo_afetado === "email" || d.campo_afetado === "email_e_cpf") ? sugg : (p[name]?.email ?? ""),
+            cpf:   (d.campo_afetado === "cpf"   || d.campo_afetado === "email_e_cpf") ? sugg : (p[name]?.cpf  ?? ""),
           },
         }));
       }
@@ -215,8 +218,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
   }
 
   async function handleApprove(name: string) {
-    const corr = corrections[name];
-    if (!corr) return;
+    const corr = corrections[name] ?? { email: "", cpf: "" };
     setApproveLoading(p => ({ ...p, [name]: true }));
     const h = await getFreshHeaders();
     if (!h) { router.push("/login"); return; }
@@ -227,6 +229,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
       });
       setDiagnoses(p => { const c = { ...p }; delete c[name]; return c; });
       setCorrections(p => { const c = { ...p }; delete c[name]; return c; });
+      setQueue(prev => prev.filter(q => q.name !== name));
       fetchData();
     } catch { /* user can retry */ }
     finally { setApproveLoading(p => ({ ...p, [name]: false })); }
@@ -290,72 +293,84 @@ export default function DashboardClient({ token, userName }: { token: string; us
     const h = await getFreshHeaders();
     if (!h) { router.push("/login"); return; }
 
-    let approved = 0, skipped = 0, errors = 0;
-
+    // Phase 1 — sequential AI analysis with live progress log
+    const items: { name: string; email: string | null; cpf: string | null }[] = [];
     for (let i = 0; i < names.length; i++) {
       if (bulkCancelRef.current) break;
-
       const name = names[i];
       setBulkProgress({ current: i + 1, total: names.length });
-
       try {
-        // Reuse cached diagnosis if available from manual triage
         let diag = diagnoses[name];
         if (!diag) {
           const diagRes = await apiFetch(`${API}/analyze/${encodeURIComponent(name)}`, { headers: h });
           if (!diagRes.ok) throw new Error(`HTTP ${diagRes.status}`);
           const d = await diagRes.json();
           diag = {
-            campo_afetado:     d.campo_afetado     || "—",
-            valor_original:    d.valor_original    || "—",
-            valor_sugerido:    d.valor_sugerido    || "",
-            diagnostico_motivo: d.diagnostico_motivo || "",
+            campo_afetado:      d.campo_afetado      || "—",
+            valor_original:     d.valor_original     || "—",
+            valor_sugerido:     d.valor_sugerido      || "",
+            diagnostico_motivo: d.diagnostico_motivo  || "",
           };
           setDiagnoses(p => ({ ...p, [name]: diag }));
         }
-
-        const corrEmail = diag.campo_afetado === "email" ? diag.valor_sugerido : "";
-        const corrCpf   = diag.campo_afetado === "cpf"   ? diag.valor_sugerido : "";
-        const hasValidFix = diag.valor_sugerido && diag.valor_sugerido !== "—";
-
-        if (!hasValidFix && mode === "auto") {
-          skipped++;
-          setBulkLog(prev => prev.map(l => l.name === name
-            ? { ...l, status: "skipped", detail: "sem sugestão automática" } : l));
-          setBulkReport(r => ({ ...r, skipped: r.skipped + 1 }));
-          continue;
-        }
-
-        const resolveRes = await apiFetch(`${API}/resolve`, {
-          method: "POST", headers: h,
-          body: JSON.stringify({ name, email: corrEmail || null, cpf: corrCpf || null }),
+        items.push({
+          name,
+          email: diag.campo_afetado === "email" ? diag.valor_sugerido || null : null,
+          cpf:   diag.campo_afetado === "cpf"   ? diag.valor_sugerido || null : null,
         });
-
-        if (resolveRes.ok) {
-          approved++;
-          setBulkLog(prev => prev.map(l => l.name === name
-            ? { ...l, status: "success", detail: `${diag.campo_afetado}: ${diag.valor_sugerido}` } : l));
-          setBulkReport(r => ({ ...r, approved: r.approved + 1 }));
-          // Remove from local diagnosis cache
-          setDiagnoses(p => { const c = { ...p }; delete c[name]; return c; });
-          setCorrections(p => { const c = { ...p }; delete c[name]; return c; });
-        } else {
-          errors++;
-          setBulkLog(prev => prev.map(l => l.name === name
-            ? { ...l, status: "error", detail: `HTTP ${resolveRes.status}` } : l));
-          setBulkReport(r => ({ ...r, error: r.error + 1 }));
-        }
+        setBulkLog(prev => prev.map(l => l.name === name
+          ? { ...l, status: "analyzing", detail: `${diag.campo_afetado}: ${diag.valor_sugerido}` } : l));
       } catch (e) {
-        errors++;
+        items.push({ name, email: null, cpf: null });
         setBulkLog(prev => prev.map(l => l.name === name
           ? { ...l, status: "error", detail: e instanceof Error ? e.message : "erro" } : l));
-        setBulkReport(r => ({ ...r, error: r.error + 1 }));
       }
+    }
+
+    if (bulkCancelRef.current || items.length === 0) {
+      setBulkStep("completed");
+      setSelectedNames([]);
+      return;
+    }
+
+    // Phase 2 — single POST /bulk-resolve (one HTTP round-trip, all DB ops server-side)
+    try {
+      const resolveRes = await apiFetch(`${API}/bulk-resolve`, {
+        method: "POST", headers: h,
+        body: JSON.stringify({ items, mode }),
+      });
+
+      if (resolveRes.ok) {
+        const report = await resolveRes.json();
+        // Update log from server response
+        setBulkLog(prev => prev.map(l => {
+          const d = (report.details as { name: string; status: string; detail?: string }[])
+            .find(r => r.name === l.name);
+          if (!d) return l;
+          return { ...l, status: d.status as BulkLogEntry["status"], detail: d.detail };
+        }));
+        setBulkReport({ approved: report.approved, skipped: report.skipped, error: report.errors });
+        // Optimistic: remove approved items from queue state immediately
+        const approvedNames = new Set(
+          (report.details as { name: string; status: string }[])
+            .filter(d => d.status === "success").map(d => d.name)
+        );
+        setQueue(prev => prev.filter(q => !approvedNames.has(q.name)));
+        approvedNames.forEach(name => {
+          setDiagnoses(p => { const c = { ...p }; delete c[name]; return c; });
+          setCorrections(p => { const c = { ...p }; delete c[name]; return c; });
+        });
+      } else {
+        setBulkReport({ approved: 0, skipped: 0, error: items.length });
+        setBulkLog(prev => prev.map(l => ({ ...l, status: "error", detail: `HTTP ${resolveRes.status}` })));
+      }
+    } catch (e) {
+      setBulkReport({ approved: 0, skipped: 0, error: items.length });
+      setBulkLog(prev => prev.map(l => ({ ...l, status: "error", detail: e instanceof Error ? e.message : "erro" })));
     }
 
     setBulkStep("completed");
     setSelectedNames([]);
-    fetchData();
   }
 
   async function handleDeleteWebhook() {
@@ -492,6 +507,37 @@ export default function DashboardClient({ token, userName }: { token: string; us
     modalOverlay:     { position: "fixed" as const, inset: 0, backgroundColor: "rgba(0,0,0,.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 },
     modalCard:        { backgroundColor: "var(--bg-surface)", borderRadius: 18, border: "1px solid var(--border)", boxShadow: "var(--shadow-lg)", padding: "32px", width: "100%", maxWidth: 560, maxHeight: "80vh", overflowY: "auto" as const },
     bulkLogBox:       { maxHeight: 220, overflowY: "auto" as const, display: "flex", flexDirection: "column" as const, gap: 4, marginTop: 12, padding: "10px 14px", backgroundColor: "var(--bg-surface-2)", borderRadius: 10, border: "1px solid var(--border)" },
+    // Audit / Compliance Hub
+    auditCardGreen:   { backgroundColor: "var(--bg-surface)", borderRadius: 14, border: "1px solid var(--border)", boxShadow: "var(--shadow-sm)", padding: "20px 24px", borderLeft: "4px solid var(--success)" },
+    auditCardBlue:    { backgroundColor: "var(--bg-surface)", borderRadius: 14, border: "1px solid var(--border)", boxShadow: "var(--shadow-sm)", padding: "20px 24px", borderLeft: "4px solid var(--accent)" },
+    auditCardPurple:  { backgroundColor: "var(--bg-surface)", borderRadius: 14, border: "1px solid var(--border)", boxShadow: "var(--shadow-sm)", padding: "20px 24px", borderLeft: "4px solid #a78bfa" },
+    auditCardRow:     { display: "flex", justifyContent: "space-between", alignItems: "flex-start" as const, marginBottom: 12 },
+    auditIconGreen:   { width: 40, height: 40, borderRadius: 12, backgroundColor: "var(--success-subtle)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.2rem", flexShrink: 0 },
+    auditIconBlue:    { width: 40, height: 40, borderRadius: 12, backgroundColor: "var(--accent-subtle)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.2rem", flexShrink: 0 },
+    auditIconPurple:  { width: 40, height: 40, borderRadius: 12, backgroundColor: "#ede9fe", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.2rem", flexShrink: 0 },
+    auditCardTitle:   { margin: 0, fontSize: "0.95rem", fontWeight: 700, color: "var(--text-primary)" },
+    auditCardSub:     { margin: 0, fontSize: "0.72rem", color: "var(--text-muted)", marginTop: 1 },
+    auditCardDesc:    { fontSize: "0.84rem", color: "var(--text-secondary)", lineHeight: 1.6 as unknown as string, marginBottom: 16 },
+    auditBadgeRow:    { display: "flex", flexWrap: "wrap" as const, gap: 8, marginBottom: 12 },
+    auditBadgeRowLast:{ display: "flex", flexWrap: "wrap" as const, gap: 8 },
+    auditBadgeGreen:  { display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 20, fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.04em", backgroundColor: "var(--success-subtle)", color: "var(--success-text)", border: "1px solid var(--success)", whiteSpace: "nowrap" as const },
+    auditBadgeBlue:   { display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 20, fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.04em", backgroundColor: "var(--accent-subtle)", color: "var(--accent-text)", border: "1px solid var(--accent)", whiteSpace: "nowrap" as const },
+    auditBadgePurple: { display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 20, fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.04em", backgroundColor: "#ede9fe", color: "#6d28d9", border: "1px solid #a78bfa", whiteSpace: "nowrap" as const },
+    auditStatusPill:  { display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 700, backgroundColor: "var(--success-subtle)", color: "var(--success-text)", border: "1px solid var(--success)" },
+    auditStatusDot:   { width: 7, height: 7, borderRadius: "50%", backgroundColor: "var(--success-text)", display: "inline-block" as const },
+    auditCountdown:   { display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", backgroundColor: "var(--bg-surface-2)", borderRadius: 8, border: "1px solid var(--border)", marginTop: 4 },
+    auditCountdownLbl:{ fontSize: "0.75rem", color: "var(--text-muted)" },
+    auditCountdownVal:{ fontFamily: "var(--font-geist-mono)", fontSize: "0.82rem", fontWeight: 700, color: "var(--text-primary)" },
+    // Loading screen
+    loadingWrap:      { textAlign: "center" as const, padding: "80px 24px" },
+    loadingSteps:     { display: "flex", justifyContent: "center", alignItems: "center", gap: 0, marginBottom: 32 },
+    loadingStepCol:   { display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6 },
+    loadingConnector: { width: 48, height: 2, margin: "0 4px 22px", transition: "background-color 0.6s" },
+    loadingBarWrap:   { width: "100%", maxWidth: 320, margin: "0 auto 16px", backgroundColor: "var(--border)", borderRadius: 99, height: 6, overflow: "hidden" },
+    loadingBar:       { height: "100%", borderRadius: 99, backgroundColor: "var(--accent)", transition: "width 1s ease-out" },
+    loadingMsg:       { color: "var(--text-secondary)", fontSize: "0.88rem", fontWeight: 500 },
+    loadingHint:      { color: "var(--text-muted)", fontSize: "0.75rem", marginTop: 4 },
+    loadingTimer:     { color: "var(--text-muted)", fontSize: "0.72rem", marginTop: 8, fontVariantNumeric: "tabular-nums" as const },
   };
 
   return (
@@ -533,18 +579,72 @@ export default function DashboardClient({ token, userName }: { token: string; us
             <button onClick={() => { setTab("settings"); if (!settingsLoaded) fetchSettings(); }} style={tab === "settings" ? s.tabActive : s.tabInactive}>
               {t.settings.tab}
             </button>
+            <button onClick={() => setTab("audit")} style={tab === "audit" ? s.tabActive : s.tabInactive}>
+              {t.audit.tab}
+            </button>
         </div>
       </div>
 
       {/* Content */}
       <main style={s.main}>
         {loading ? (
-          <div style={{ textAlign: "center", padding: "80px 0" }}>
-            <div style={{ width: 36, height: 36, border: "3px solid var(--border)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
-            <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>
-              {elapsed >= 8 ? t.dashboard.warmingUp : t.dashboard.loading}
+          <div style={s.loadingWrap}>
+            {/* Step indicators */}
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 0, marginBottom: 32 }}>
+              {[
+                { label: t.dashboard.stepConnect, threshold: 0 },
+                { label: t.dashboard.stepWarm,    threshold: 3 },
+                { label: t.dashboard.stepLoad,    threshold: 14 },
+              ].map((step, i) => {
+                const active  = elapsed >= step.threshold;
+                const current = i === (elapsed < 3 ? 0 : elapsed < 14 ? 1 : 2);
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center" }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+                      <div style={{
+                        width: 28, height: 28, borderRadius: "50%",
+                        backgroundColor: active ? "var(--accent)" : "var(--border)",
+                        border: current ? "2px solid var(--accent)" : "2px solid transparent",
+                        boxShadow: current ? "0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent)" : "none",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        transition: "all 0.4s",
+                        fontSize: 12, color: active ? "#fff" : "var(--text-muted)",
+                        fontWeight: 700,
+                      }}>
+                        {active && !current ? "✓" : i + 1}
+                      </div>
+                      <span style={{ fontSize: "0.72rem", color: active ? "var(--text-primary)" : "var(--text-muted)", fontWeight: current ? 600 : 400, whiteSpace: "nowrap" as const }}>
+                        {step.label}
+                      </span>
+                    </div>
+                    {i < 2 && (
+                      <div style={{ width: 48, height: 2, backgroundColor: elapsed > step.threshold ? "var(--accent)" : "var(--border)", margin: "0 4px 22px", transition: "background-color 0.6s" }} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Progress bar */}
+            <div style={{ width: "100%", maxWidth: 320, margin: "0 auto 16px", backgroundColor: "var(--border)", borderRadius: 99, height: 6, overflow: "hidden" }}>
+              <div style={{
+                height: "100%", borderRadius: 99,
+                backgroundColor: "var(--accent)",
+                width: `${Math.min(95, elapsed < 3 ? elapsed * 10 : elapsed < 14 ? 30 + (elapsed - 3) * 5 : 85 + (elapsed - 14) * 2)}%`,
+                transition: "width 1s ease-out",
+              }} />
+            </div>
+
+            {/* Message + timer */}
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.88rem", fontWeight: 500 }}>
+              {elapsed < 3 ? t.dashboard.loading : elapsed < 14 ? t.dashboard.warmingUp : t.dashboard.loading}
             </p>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.78rem", marginTop: 6 }}>{t.dashboard.coldStart}</p>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.75rem", marginTop: 4 }}>
+              {elapsed >= 3 ? t.dashboard.coldStart : " "}
+            </p>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", marginTop: 8, fontVariantNumeric: "tabular-nums" }}>
+              {elapsed}s
+            </p>
           </div>
         ) : error ? (
           <div style={s.errorBox}>
@@ -800,6 +900,84 @@ export default function DashboardClient({ token, userName }: { token: string; us
               </div>
             )}
           </div>
+        ) : tab === "audit" ? (
+          /* ── COMPLIANCE HUB ── */
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ marginBottom: 16 }}>
+              <h1 style={s.auditCardTitle}>{t.audit.title}</h1>
+              <p style={s.auditCardSub}>{t.audit.subtitle}</p>
+            </div>
+
+            {/* Card 1 — Data Retention */}
+            <div style={s.auditCardGreen}>
+              <div style={s.auditCardRow}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={s.auditIconGreen}>🕒</div>
+                  <div>
+                    <p style={s.auditCardTitle}>{t.audit.retentionTitle}</p>
+                    <p style={s.auditCardSub}>{t.audit.retentionSubtitle}</p>
+                  </div>
+                </div>
+                <span style={s.auditStatusPill}><span style={s.auditStatusDot} />{t.audit.statusActive}</span>
+              </div>
+              <p style={s.auditCardDesc}>{t.audit.retentionDesc}</p>
+              <div style={s.auditBadgeRow}>
+                <span style={s.auditBadgeGreen}>{t.audit.retentionBadge1}</span>
+                <span style={s.auditBadgeGreen}>{t.audit.retentionBadge2}</span>
+                <span style={s.auditBadgeGreen}>{t.audit.retentionBadge3}</span>
+              </div>
+              <div style={s.auditCountdown}>
+                <span style={s.auditCountdownLbl}>{t.audit.retentionNext}:</span>
+                <span style={s.auditCountdownVal}>{(() => {
+                  const now = new Date(); const next = new Date();
+                  next.setUTCHours(3, 0, 0, 0);
+                  if (now >= next) next.setUTCDate(next.getUTCDate() + 1);
+                  const ms = next.getTime() - now.getTime();
+                  return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
+                })()}</span>
+              </div>
+            </div>
+
+            {/* Card 2 — Rate Limiting */}
+            <div style={s.auditCardBlue}>
+              <div style={s.auditCardRow}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={s.auditIconBlue}>🛡️</div>
+                  <div>
+                    <p style={s.auditCardTitle}>{t.audit.rateLimitTitle}</p>
+                    <p style={s.auditCardSub}>{t.audit.rateLimitSubtitle}</p>
+                  </div>
+                </div>
+                <span style={s.auditStatusPill}><span style={s.auditStatusDot} />{t.audit.rateLimitStatus}</span>
+              </div>
+              <p style={s.auditCardDesc}>{t.audit.rateLimitDesc}</p>
+              <div style={s.auditBadgeRowLast}>
+                <span style={s.auditBadgeBlue}>{t.audit.rateLimitBadge1}</span>
+                <span style={s.auditBadgeBlue}>{t.audit.rateLimitBadge2}</span>
+                <span style={s.auditBadgeBlue}>{t.audit.rateLimitBadge3}</span>
+              </div>
+            </div>
+
+            {/* Card 3 — API Key Security */}
+            <div style={s.auditCardPurple}>
+              <div style={s.auditCardRow}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={s.auditIconPurple}>🔑</div>
+                  <div>
+                    <p style={s.auditCardTitle}>{t.audit.cryptoTitle}</p>
+                    <p style={s.auditCardSub}>{t.audit.cryptoSubtitle}</p>
+                  </div>
+                </div>
+                <span style={s.auditStatusPill}><span style={s.auditStatusDot} />{t.audit.statusActive}</span>
+              </div>
+              <p style={s.auditCardDesc}>{t.audit.cryptoDesc}</p>
+              <div style={s.auditBadgeRowLast}>
+                <span style={s.auditBadgePurple}>{t.audit.cryptoBadge1}</span>
+                <span style={s.auditBadgePurple}>{t.audit.cryptoBadge2}</span>
+                <span style={s.auditBadgePurple}>{t.audit.cryptoBadge3}</span>
+              </div>
+            </div>
+          </div>
         ) : (
           /* ── SETTINGS ── */
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -1050,7 +1228,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
                 )}
 
                 <button
-                  onClick={() => setBulkStep("idle")}
+                  onClick={() => { setBulkStep("idle"); fetchData(); }}
                   style={{ ...s.ingestBtn, width: "100%", textAlign: "center" }}
                 >
                   {t.bulk.btnClose}
