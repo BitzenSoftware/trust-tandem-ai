@@ -11,6 +11,7 @@ const API = process.env.NEXT_PUBLIC_API_URL + "/api/v1";
 type CleanRecord    = { name: string; email: string; cpf: string };
 type QueueItem      = { name: string; email_hint: string; cpf_hint: string };
 type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown> };
+type PlanInfo       = { plan: string; field_limit: number; field_count: number };
 type DiagnosisResult = {
   campo_afetado: string;
   valor_original: string;
@@ -85,6 +86,8 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [schemaLoaded,  setSchemaLoaded]  = useState(false);
   const [newField,      setNewField]      = useState({ field_key: "", label: "", field_type: "text", required: true, position: 0 });
   const [schemaLoading, setSchemaLoading] = useState(false);
+  const [planInfo,      setPlanInfo]      = useState<PlanInfo | null>(null);
+  const [addFieldError, setAddFieldError] = useState("");
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [csvMapStep,    setCsvMapStep]    = useState<"upload" | "map" | "ready">("upload");
   const [apiKeys,       setApiKeys]       = useState<{ id: number; label: string | null; created_at: string }[]>([]);
@@ -182,14 +185,19 @@ export default function DashboardClient({ token, userName }: { token: string; us
     const h = await getFreshHeaders();
     if (!h) return;
     try {
-      const res = await apiFetch(`${API}/schema`, { headers: h });
-      if (res.ok) { setSchema(await res.json()); setSchemaLoaded(true); }
+      const [schemaRes, planRes] = await Promise.all([
+        apiFetch(`${API}/schema`, { headers: h }),
+        apiFetch(`${API}/plan`,   { headers: h }),
+      ]);
+      if (schemaRes.ok) { setSchema(await schemaRes.json()); setSchemaLoaded(true); }
+      if (planRes.ok)   setPlanInfo(await planRes.json());
     } catch { /* ignore */ }
   }, []);
 
   async function handleAddField() {
     if (!newField.field_key || !newField.label) return;
     setSchemaLoading(true);
+    setAddFieldError("");
     const h = await getFreshHeaders();
     if (!h) { setSchemaLoading(false); return; }
     try {
@@ -200,6 +208,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
       if (res.ok) {
         setSchema(await res.json());
         setNewField({ field_key: "", label: "", field_type: "text", required: true, position: 0 });
+        // Refresh plan count after successful add
+        const planRes = await apiFetch(`${API}/plan`, { headers: h });
+        if (planRes.ok) setPlanInfo(await planRes.json());
+      } else if (res.status === 403) {
+        const body = await res.json().catch(() => ({}));
+        setAddFieldError(body.detail || t.schema.limitReached);
       }
     } catch { /* ignore */ }
     finally { setSchemaLoading(false); }
@@ -1038,8 +1052,22 @@ export default function DashboardClient({ token, userName }: { token: string; us
           /* ── SCHEMA EDITOR ── */
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={s.settingsCard}>
-              <p style={s.settingsTitle}>{t.schema.title}</p>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 4 }}>
+                <p style={{ ...s.settingsTitle, marginBottom: 0 }}>{t.schema.title}</p>
+                {planInfo && (
+                  <span style={{ fontSize: "0.72rem", fontWeight: 700, color: planInfo.field_count >= planInfo.field_limit ? "var(--error-text, #b91c1c)" : "var(--text-muted)", backgroundColor: planInfo.field_count >= planInfo.field_limit ? "var(--error-subtle, #fee2e2)" : "var(--bg-surface-2)", padding: "3px 10px", borderRadius: 20, border: "1px solid var(--border)", whiteSpace: "nowrap" }}>
+                    {planInfo.field_count} / {planInfo.field_limit} {t.schema.customFields} · {planInfo.plan.charAt(0).toUpperCase() + planInfo.plan.slice(1)}
+                  </span>
+                )}
+              </div>
               <p style={s.settingsDesc}>{t.schema.subtitle}</p>
+
+              {/* Plan limit warning */}
+              {planInfo && planInfo.field_count >= planInfo.field_limit && (
+                <div style={{ backgroundColor: "var(--error-subtle, #fee2e2)", border: "1px solid var(--error, #ef4444)", borderRadius: 8, padding: "10px 14px", fontSize: "0.82rem", color: "var(--error-text, #b91c1c)", marginBottom: 14 }}>
+                  {t.schema.limitReached}
+                </div>
+              )}
 
               {/* Built-in name field */}
               <div style={{ marginBottom: 12 }}>
@@ -1108,8 +1136,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
                     </label>
                   </div>
                 </div>
-                <button onClick={handleAddField} disabled={schemaLoading || !newField.field_key || !newField.label}
-                  style={{ ...s.ingestBtn, opacity: schemaLoading || !newField.field_key || !newField.label ? 0.6 : 1 }}>
+                {addFieldError && (
+                  <p style={{ fontSize: "0.78rem", color: "var(--error-text, #b91c1c)", margin: "4px 0 0" }}>{addFieldError}</p>
+                )}
+                <button onClick={handleAddField}
+                  disabled={schemaLoading || !newField.field_key || !newField.label || !!(planInfo && planInfo.field_count >= planInfo.field_limit)}
+                  style={{ ...s.ingestBtn, opacity: schemaLoading || !newField.field_key || !newField.label || !!(planInfo && planInfo.field_count >= planInfo.field_limit) ? 0.6 : 1 }}>
                   {schemaLoading ? t.schema.saving : t.schema.addField}
                 </button>
               </div>
