@@ -600,6 +600,139 @@ def delete_field_schema(tenant_id: str, field_key: str) -> int:
     return 0
 
 
+# --- admin_plan_configs ---
+
+def get_plan_configs() -> list[dict]:
+    defaults = [
+        {"plan_name": "starter",    "field_limit": PLAN_LIMITS["starter"],    "price_monthly": 0.0,  "stripe_price_id": None},
+        {"plan_name": "pro",        "field_limit": PLAN_LIMITS["pro"],        "price_monthly": 49.0, "stripe_price_id": None},
+        {"plan_name": "enterprise", "field_limit": PLAN_LIMITS["enterprise"], "price_monthly": 199.0,"stripe_price_id": None},
+    ]
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/admin_plan_configs",
+            params={"select": "plan_name,field_limit,price_monthly,stripe_price_id", "order": "plan_name.asc"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows if rows else defaults
+    return defaults
+
+
+def upsert_plan_config(plan_name: str, field_limit: int, price_monthly: float, stripe_price_id: str | None) -> None:
+    PLAN_LIMITS[plan_name] = field_limit
+    if USE_SUPABASE:
+        _http.post(
+            f"{_SUPABASE_URL}/rest/v1/admin_plan_configs",
+            json={"plan_name": plan_name, "field_limit": field_limit,
+                  "price_monthly": price_monthly, "stripe_price_id": stripe_price_id,
+                  "updated_at": datetime.now(timezone.utc).isoformat()},
+            headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
+            params={"on_conflict": "plan_name"}, timeout=10,
+        ).raise_for_status()
+
+
+def get_plan_field_limit(plan_name: str) -> int:
+    if USE_SUPABASE:
+        try:
+            resp = _http.get(
+                f"{_SUPABASE_URL}/rest/v1/admin_plan_configs",
+                params={"select": "field_limit", "plan_name": f"eq.{plan_name}"},
+                headers=_HEADERS, timeout=10,
+            )
+            resp.raise_for_status()
+            rows = resp.json()
+            if rows:
+                return rows[0]["field_limit"]
+        except Exception:
+            pass
+    return PLAN_LIMITS.get(plan_name, 5)
+
+
+# --- admin_secrets ---
+
+def upsert_secret(key_name: str, encrypted_value: str) -> None:
+    if USE_SUPABASE:
+        _http.post(
+            f"{_SUPABASE_URL}/rest/v1/admin_secrets",
+            json={"key_name": key_name, "encrypted": encrypted_value,
+                  "updated_at": datetime.now(timezone.utc).isoformat()},
+            headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
+            params={"on_conflict": "key_name"}, timeout=10,
+        ).raise_for_status()
+        return
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_secrets (
+                key_name   TEXT PRIMARY KEY,
+                encrypted  TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "INSERT INTO admin_secrets (key_name, encrypted) VALUES (?, ?)"
+            " ON CONFLICT(key_name) DO UPDATE SET encrypted=excluded.encrypted, updated_at=CURRENT_TIMESTAMP",
+            (key_name, encrypted_value),
+        )
+
+
+def list_secrets() -> list[dict]:
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/admin_secrets",
+            params={"select": "key_name,updated_at", "order": "key_name.asc"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute(
+                "SELECT key_name, updated_at FROM admin_secrets ORDER BY key_name"
+            ).fetchall()]
+    return []
+
+
+def get_secret_encrypted(key_name: str) -> str | None:
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/admin_secrets",
+            params={"select": "encrypted", "key_name": f"eq.{key_name}"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0]["encrypted"] if rows else None
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT encrypted FROM admin_secrets WHERE key_name = ?", (key_name,)
+            ).fetchone()
+            return row[0] if row else None
+    return None
+
+
+def delete_secret(key_name: str) -> int:
+    if USE_SUPABASE:
+        resp = _http.delete(
+            f"{_SUPABASE_URL}/rest/v1/admin_secrets",
+            params={"key_name": f"eq.{key_name}"},
+            headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
+        )
+        resp.raise_for_status()
+        return len(resp.json())
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            return conn.execute(
+                "DELETE FROM admin_secrets WHERE key_name = ?", (key_name,)
+            ).rowcount
+    return 0
+
+
 def fire_webhook(url: str, secret: str, records: list[dict]) -> None:
     payload = json.dumps({"records": records})
     sig = _hmac.new(secret.encode(), payload.encode(), "sha256").hexdigest()
