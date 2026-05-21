@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -138,6 +139,29 @@ _rate_limiter = _TenantRateLimiter(max_requests=20, window_seconds=60)
 
 def _rate_limit(tenant_id: str = Depends(_get_tenant_id)) -> None:
     _rate_limiter.check(tenant_id)
+
+
+def _decode_jwt_email(token: str) -> str:
+    """Extracts email from JWT payload without re-verifying (already validated by Supabase)."""
+    try:
+        segment = token.split(".")[1]
+        segment += "=" * (4 - len(segment) % 4)
+        payload = json.loads(base64.b64decode(segment))
+        return payload.get("email", "")
+    except Exception:
+        return ""
+
+
+def _get_operator_email(
+    creds: HTTPAuthorizationCredentials | None = Security(_bearer),
+    api_key: str | None = Security(_key_scheme),
+) -> str:
+    if creds:
+        return _decode_jwt_email(creds.credentials) or "jwt-user"
+    if api_key:
+        tenant_id = repository.validate_api_key(api_key)
+        return f"api-key:{tenant_id or 'gateway'}"
+    return "system"
 
 
 app = FastAPI(
@@ -286,9 +310,12 @@ def visualizar_banco_seguro(painel: PainelOrquestracao = Depends(_get_painel)):
 
 @_router.post("/resolve", response_model=RespostaIngestao,
               summary="Submete correção humana para um registro da fila")
-def resolver_registro(cliente: ClienteInput, painel: PainelOrquestracao = Depends(_get_painel)):
+def resolver_registro(
+    cliente: ClienteInput,
+    painel: PainelOrquestracao = Depends(_get_painel),
+    operator_email: str = Depends(_get_operator_email),
+):
     before = len(painel.banco_limpo)
-    # Merge corrections with original so a partial fix (e.g. only email) keeps the other field.
     original = next((r for r in painel.fila_revisao if r["name"] == cliente.name), {})
     merged = {
         "name":  cliente.name,
@@ -296,13 +323,19 @@ def resolver_registro(cliente: ClienteInput, painel: PainelOrquestracao = Depend
         "cpf":   cliente.cpf   if cliente.cpf   is not None else original.get("cpf"),
     }
     painel.remover_da_fila(cliente.name)
-    # resolver_direto bypasses re-queue logic — human approval is trusted unconditionally
     painel.resolver_direto(merged)
     after_records = painel.banco_limpo
     if len(after_records) > before:
         wh = repository.get_webhook(painel.tenant_id)
         if wh and wh.get("active"):
             repository.fire_webhook(wh["url"], wh["secret"], after_records[-1:])
+    repository.create_audit_log(
+        tenant_id=painel.tenant_id,
+        operator_email=operator_email,
+        record_name=cliente.name,
+        action="APPROVE_MANUAL",
+        fields_affected={"email_provided": cliente.email is not None, "cpf_provided": cliente.cpf is not None},
+    )
     return RespostaIngestao(
         status="Resolvido",
         mensagem=f"Registro '{cliente.name}' reprocessado com dados corrigidos.",
@@ -314,7 +347,11 @@ def resolver_registro(cliente: ClienteInput, painel: PainelOrquestracao = Depend
 @_router.post("/bulk-resolve", response_model=BulkResolveReport,
               summary="Resolve em lote registros da fila — único round-trip HTTP, N operações DB",
               dependencies=[Depends(_rate_limit)])
-def bulk_resolver(payload: BulkResolveInput, painel: PainelOrquestracao = Depends(_get_painel)):
+def bulk_resolver(
+    payload: BulkResolveInput,
+    painel: PainelOrquestracao = Depends(_get_painel),
+    operator_email: str = Depends(_get_operator_email),
+):
     queue_index = {r["name"]: r for r in painel.fila_revisao}
     wh = repository.get_webhook(painel.tenant_id)
     approved = skipped = errors = webhooks_fired = 0
@@ -357,6 +394,13 @@ def bulk_resolver(payload: BulkResolveInput, painel: PainelOrquestracao = Depend
             name=item.name, status="success",
             detail=f"email={merged['email']}" if item.email else f"cpf={merged['cpf']}"
         ))
+        repository.create_audit_log(
+            tenant_id=painel.tenant_id,
+            operator_email=operator_email,
+            record_name=item.name,
+            action="APPROVE_BULK",
+            fields_affected={"email_provided": item.email is not None, "cpf_provided": item.cpf is not None},
+        )
 
     if approved_records and wh and wh.get("active"):
         repository.fire_webhook(wh["url"], wh["secret"], approved_records)
@@ -460,19 +504,42 @@ def analisar_registro(name: str, painel: PainelOrquestracao = Depends(_get_paine
 
 @_router.delete("/review-queue/{name}", status_code=status.HTTP_204_NO_CONTENT,
                 summary="Expurga um registro da fila (direito ao esquecimento LGPD)")
-def expurgar_registro(name: str, painel: PainelOrquestracao = Depends(_get_painel)):
+def expurgar_registro(
+    name: str,
+    painel: PainelOrquestracao = Depends(_get_painel),
+    operator_email: str = Depends(_get_operator_email),
+):
     deleted = painel.remover_da_fila(name)
     if deleted == 0:
         raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado na fila.")
+    repository.create_audit_log(
+        tenant_id=painel.tenant_id,
+        operator_email=operator_email,
+        record_name=name,
+        action="EXPURGO",
+        fields_affected={},
+    )
 
 
 @_router.delete("/admin/purge-expired",
                 summary="LGPD Art. 15 — expurga registros da fila sem ação há mais de N dias")
 def purgar_expirados(days: int = 30, tenant_id: str = Depends(_get_tenant_id)):
-    # Super-admin purges all tenants; regular tenant purges only their own records.
     scope = None if tenant_id == "__admin__" else tenant_id
     deleted = repository.purge_expired_queue(tenant_id=scope, days=days)
+    if deleted > 0:
+        repository.create_audit_log(
+            tenant_id=scope or "__admin__",
+            operator_email="system:purge-expired",
+            record_name=f"__bulk_purge_{deleted}_records",
+            action="PURGE_AUTO",
+            fields_affected={"count": deleted, "days": days},
+        )
     return {"deleted": deleted, "days": days, "scope": scope or "all"}
+
+
+@_router.get("/audit-logs", summary="Logs de auditoria e compliance do tenant (ANPD)")
+def listar_audit_logs(limit: int = 100, tenant_id: str = Depends(_get_tenant_id)):
+    return repository.list_audit_logs(tenant_id=tenant_id, limit=min(limit, 500))
 
 
 @_router.delete("/reset", status_code=status.HTTP_204_NO_CONTENT,
