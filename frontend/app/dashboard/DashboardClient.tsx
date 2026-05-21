@@ -10,6 +10,7 @@ const API = process.env.NEXT_PUBLIC_API_URL + "/api/v1";
 
 type CleanRecord    = { name: string; email: string; cpf: string };
 type QueueItem      = { name: string; email_hint: string; cpf_hint: string };
+type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown> };
 type DiagnosisResult = {
   campo_afetado: string;
   valor_original: string;
@@ -62,7 +63,7 @@ function MoonIcon() {
 export default function DashboardClient({ token, userName }: { token: string; userName: string }) {
   const router = useRouter();
   const { t } = useTranslation();
-  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "audit">("dashboard");
+  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "schema" | "audit">("dashboard");
   const [db,        setDb]        = useState<CleanRecord[]>([]);
   const [queue,     setQueue]     = useState<QueueItem[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -79,7 +80,13 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [ingestResult,  setIngestResult]  = useState<{ total: number; clean: number; review: number } | null>(null);
   const [ingestError,   setIngestError]   = useState("");
   const [ingestProgress, setIngestProgress] = useState<{ current: number; total: number; processed: number; totalRecords: number } | null>(null);
-  const [formRecord,    setFormRecord]    = useState({ name: "", email: "", cpf: "" });
+  const [formRecord,    setFormRecord]    = useState<Record<string, string>>({ name: "", email: "", cpf: "" });
+  const [schema,        setSchema]        = useState<FieldSchema[]>([]);
+  const [schemaLoaded,  setSchemaLoaded]  = useState(false);
+  const [newField,      setNewField]      = useState({ field_key: "", label: "", field_type: "text", required: true, position: 0 });
+  const [schemaLoading, setSchemaLoading] = useState(false);
+  const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
+  const [csvMapStep,    setCsvMapStep]    = useState<"upload" | "map" | "ready">("upload");
   const [apiKeys,       setApiKeys]       = useState<{ id: number; label: string | null; created_at: string }[]>([]);
   const [newKeyLabel,   setNewKeyLabel]   = useState("");
   const [generatedKey,  setGeneratedKey]  = useState<string | null>(null);
@@ -170,6 +177,56 @@ export default function DashboardClient({ token, userName }: { token: string; us
     } catch { /* ignore */ }
     finally { setSettingsLoaded(true); }
   }, []);
+
+  const fetchSchema = useCallback(async () => {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    try {
+      const res = await apiFetch(`${API}/schema`, { headers: h });
+      if (res.ok) { setSchema(await res.json()); setSchemaLoaded(true); }
+    } catch { /* ignore */ }
+  }, []);
+
+  async function handleAddField() {
+    if (!newField.field_key || !newField.label) return;
+    setSchemaLoading(true);
+    const h = await getFreshHeaders();
+    if (!h) { setSchemaLoading(false); return; }
+    try {
+      const res = await apiFetch(`${API}/schema/fields`, {
+        method: "POST", headers: h,
+        body: JSON.stringify(newField),
+      });
+      if (res.ok) {
+        setSchema(await res.json());
+        setNewField({ field_key: "", label: "", field_type: "text", required: true, position: 0 });
+      }
+    } catch { /* ignore */ }
+    finally { setSchemaLoading(false); }
+  }
+
+  async function handleDeleteField(field_key: string) {
+    if (!confirm(t.schema.confirmDelete)) return;
+    const h = await getFreshHeaders();
+    if (!h) return;
+    await apiFetch(`${API}/schema/fields/${encodeURIComponent(field_key)}`, { method: "DELETE", headers: h });
+    fetchSchema();
+  }
+
+  function autoMapColumns(columns: string[], currentSchema: FieldSchema[]): Record<string, string> {
+    const mapping: Record<string, string> = {};
+    for (const col of columns) {
+      const norm = col.toLowerCase().replace(/[^a-z0-9]/g, "_");
+      const match = currentSchema.find(f =>
+        f.field_key === norm || f.field_key === col.toLowerCase() ||
+        f.label.toLowerCase() === col.toLowerCase()
+      );
+      mapping[col] = match ? match.field_key : "__ignore__";
+    }
+    // always map "name" column if present
+    if (columns.includes("name")) mapping["name"] = "name";
+    return mapping;
+  }
 
   async function handleLogout() {
     const sb = createClient();
@@ -403,17 +460,39 @@ export default function DashboardClient({ token, userName }: { token: string; us
       skipEmptyLines: true,
       complete: (results: { data: Record<string, string>[]; meta: { fields?: string[] } }) => {
         const columns = results.meta.fields ?? [];
-        const valid = ["name", "email", "cpf"].every(c => columns.includes(c));
         setCsvColumns(columns);
         setCsvData(results.data);
-        setIsCsvValid(valid);
         setIngestResult(null);
         setIngestError("");
+        // Build initial mapping (auto-match by field_key / label)
+        const currentSchema = schema.length > 0 ? schema : [
+          { field_key: "email", label: "E-mail",   field_type: "email", required: true, position: 1, validation_rules: {} },
+          { field_key: "cpf",   label: "CPF/CNPJ", field_type: "cpf",   required: true, position: 2, validation_rules: {} },
+        ];
+        const mapping = autoMapColumns(columns, currentSchema);
+        setColumnMapping(mapping);
+        // If all required fields mapped, skip to ready; otherwise show mapper
+        const schemaFields = ["name", ...currentSchema.map(f => f.field_key)];
+        const allMapped = schemaFields.every(fk => Object.values(mapping).includes(fk));
+        setCsvMapStep(allMapped ? "ready" : "map");
+        setIsCsvValid(true);
       },
     });
   }
 
   const CHUNK_SIZE = 500;
+
+  function applyColumnMapping(data: Record<string, string>[], mapping: Record<string, string>): Record<string, string>[] {
+    return data.map(row => {
+      const mapped: Record<string, string> = {};
+      for (const [csvCol, fieldKey] of Object.entries(mapping)) {
+        if (fieldKey && fieldKey !== "__ignore__") {
+          mapped[fieldKey] = row[csvCol] ?? "";
+        }
+      }
+      return mapped;
+    });
+  }
 
   async function submitIngestion(payload: Record<string, string>[]) {
     setIngestLoading(true); setIngestError(""); setIngestResult(null); setIngestProgress(null);
@@ -578,6 +657,9 @@ export default function DashboardClient({ token, userName }: { token: string; us
             </button>
             <button onClick={() => { setTab("settings"); if (!settingsLoaded) fetchSettings(); }} style={tab === "settings" ? s.tabActive : s.tabInactive}>
               {t.settings.tab}
+            </button>
+            <button onClick={() => { setTab("schema"); if (!schemaLoaded) fetchSchema(); }} style={tab === "schema" ? s.tabActive : s.tabInactive}>
+              {t.schema.tab}
             </button>
             <button onClick={() => setTab("audit")} style={tab === "audit" ? s.tabActive : s.tabInactive}>
               {t.audit.tab}
@@ -830,6 +912,46 @@ export default function DashboardClient({ token, userName }: { token: string; us
                         </tbody>
                       </table>
                     </div>
+                    {/* CSV column mapper */}
+                    {csvMapStep === "map" && (
+                      <div style={{ marginBottom: 16, padding: "16px", backgroundColor: "var(--bg-surface-2)", borderRadius: 10, border: "1px solid var(--border)" }}>
+                        <p style={{ fontWeight: 700, fontSize: "0.88rem", color: "var(--text-primary)", marginBottom: 4 }}>{t.schema.csvMapTitle}</p>
+                        <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: 12 }}>{t.schema.csvMapSubtitle}</p>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          {csvColumns.map(col => (
+                            <div key={col} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <span style={{ flex: 1, fontFamily: "var(--font-geist-mono)", fontSize: "0.78rem", color: "var(--text-secondary)", padding: "6px 10px", backgroundColor: "var(--bg-surface)", borderRadius: 6, border: "1px solid var(--border)" }}>{col}</span>
+                              <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>→</span>
+                              <select
+                                style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px", fontSize: "0.82rem", color: "var(--text-primary)", backgroundColor: "var(--bg-surface-2)", outline: "none" }}
+                                value={columnMapping[col] ?? "__ignore__"}
+                                onChange={e => setColumnMapping(p => ({ ...p, [col]: e.target.value }))}
+                              >
+                                <option value="__ignore__">{t.schema.ignore}</option>
+                                <option value="name">{t.ingest.fieldName}</option>
+                                {(schema.length > 0 ? schema : [
+                                  { field_key: "email", label: "E-mail" },
+                                  { field_key: "cpf",   label: "CPF/CNPJ" },
+                                ]).map(f => (
+                                  <option key={f.field_key} value={f.field_key}>{f.label}</option>
+                                ))}
+                              </select>
+                              {columnMapping[col] && columnMapping[col] !== "__ignore__" &&
+                                Object.keys(autoMapColumns([col], schema.length > 0 ? schema : [])).length > 0 &&
+                                autoMapColumns([col], schema.length > 0 ? schema : [])[col] === columnMapping[col] && (
+                                <span style={{ fontSize: "0.65rem", color: "var(--success-text)", backgroundColor: "var(--success-subtle)", padding: "2px 6px", borderRadius: 4, fontWeight: 700 }}>{t.schema.autoMapped}</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        <button
+                          onClick={() => setCsvMapStep("ready")}
+                          style={{ ...s.ingestBtn, marginTop: 14, fontSize: "0.82rem" }}
+                        >
+                          {t.schema.confirmMap}
+                        </button>
+                      </div>
+                    )}
                     {ingestLoading && ingestProgress ? (
                       <div>
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", color: "var(--text-secondary)", marginBottom: 6 }}>
@@ -849,38 +971,50 @@ export default function DashboardClient({ token, userName }: { token: string; us
                           {Math.round((ingestProgress.current / ingestProgress.total) * 100)}% — {t.ingest.processing}
                         </p>
                       </div>
-                    ) : (
-                      <button disabled={!isCsvValid || ingestLoading} onClick={() => submitIngestion(csvData)}
-                        style={{ ...s.ingestBtn, opacity: !isCsvValid || ingestLoading ? 0.6 : 1 }}>
+                    ) : csvMapStep !== "map" ? (
+                      <button
+                        disabled={!isCsvValid || ingestLoading}
+                        onClick={() => submitIngestion(
+                          Object.values(columnMapping).some(v => v && v !== "__ignore__")
+                            ? applyColumnMapping(csvData, columnMapping)
+                            : csvData
+                        )}
+                        style={{ ...s.ingestBtn, opacity: !isCsvValid || ingestLoading ? 0.6 : 1 }}
+                      >
                         {t.ingest.process}
                       </button>
-                    )}
+                    ) : null}
                   </div>
                 )}
               </div>
             ) : (
               <div style={s.card}>
                 <form onSubmit={e => { e.preventDefault(); submitIngestion([formRecord]); }} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {/* name is always first */}
                   <div>
                     <label style={s.ingestLabel}>{t.ingest.fieldName}</label>
-                    <input required type="text" style={s.ingestInput} value={formRecord.name} onChange={e => setFormRecord({ ...formRecord, name: e.target.value })} />
+                    <input required type="text" style={s.ingestInput} value={formRecord.name ?? ""} onChange={e => setFormRecord(p => ({ ...p, name: e.target.value }))} />
                   </div>
-                  <div>
-                    <label style={s.ingestLabel}>{t.ingest.fieldEmail}</label>
-                    <input type="email" style={s.ingestInput} value={formRecord.email} onChange={e => setFormRecord({ ...formRecord, email: e.target.value })} />
-                  </div>
-                  <div>
-                    <label style={s.ingestLabel}>{t.ingest.fieldCpf}</label>
-                    <input
-                      type="text"
-                      style={s.ingestInput}
-                      value={formRecord.cpf}
-                      placeholder="000.000.000-00 ou 00.000.000/0000-00"
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setFormRecord({ ...formRecord, cpf: formatCpfCnpj(e.target.value) })
-                      }
-                    />
-                  </div>
+                  {/* dynamic schema fields */}
+                  {(schema.length > 0 ? schema : [
+                    { field_key: "email", label: t.ingest.fieldEmail, field_type: "email", required: true, position: 1, validation_rules: {} },
+                    { field_key: "cpf",   label: t.ingest.fieldCpf,   field_type: "cpf",   required: true, position: 2, validation_rules: {} },
+                  ]).map(f => (
+                    <div key={f.field_key}>
+                      <label style={s.ingestLabel}>{f.label}{f.required ? "" : " (opcional)"}</label>
+                      <input
+                        type={f.field_type === "email" ? "email" : f.field_type === "number" ? "number" : "text"}
+                        style={s.ingestInput}
+                        required={f.required}
+                        value={formRecord[f.field_key] ?? ""}
+                        placeholder={f.field_type === "cpf" ? "000.000.000-00 ou 00.000.000/0000-00" : ""}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                          const val = f.field_type === "cpf" ? formatCpfCnpj(e.target.value) : e.target.value;
+                          setFormRecord(p => ({ ...p, [f.field_key]: val }));
+                        }}
+                      />
+                    </div>
+                  ))}
                   <button type="submit" disabled={ingestLoading} style={{ ...s.ingestBtn, opacity: ingestLoading ? 0.6 : 1 }}>
                     {ingestLoading ? t.ingest.processing : t.ingest.submit}
                   </button>
@@ -899,6 +1033,87 @@ export default function DashboardClient({ token, userName }: { token: string; us
                 </ul>
               </div>
             )}
+          </div>
+        ) : tab === "schema" ? (
+          /* ── SCHEMA EDITOR ── */
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={s.settingsCard}>
+              <p style={s.settingsTitle}>{t.schema.title}</p>
+              <p style={s.settingsDesc}>{t.schema.subtitle}</p>
+
+              {/* Built-in name field */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={s.keyRow}>
+                  <div>
+                    <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>name</p>
+                    <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>text · {t.schema.required} · {t.schema.position}: 0</p>
+                  </div>
+                  <span style={{ fontSize: "0.68rem", fontWeight: 700, color: "var(--text-muted)", backgroundColor: "var(--bg-surface-2)", padding: "3px 8px", borderRadius: 6, border: "1px solid var(--border)" }}>built-in</span>
+                </div>
+              </div>
+
+              {/* Configured fields */}
+              {schema.length === 0 && (
+                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: 12 }}>{t.schema.defaultNotice}</p>
+              )}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+                {schema.map(f => (
+                  <div key={f.field_key} style={s.keyRow}>
+                    <div>
+                      <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>{f.field_key} <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>— {f.label}</span></p>
+                      <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{f.field_type} · {f.required ? t.schema.required : "opcional"} · {t.schema.position}: {f.position}</p>
+                    </div>
+                    <button onClick={() => handleDeleteField(f.field_key)} style={s.revokeBtn}>{t.schema.deleteField}</button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Add field form */}
+              <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 10 }}>{t.schema.addField}</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div>
+                    <label style={s.ingestLabel}>{t.schema.fieldKey}</label>
+                    <input type="text" placeholder={t.schema.fieldKeyPlaceholder} style={s.ingestInput}
+                      value={newField.field_key}
+                      onChange={e => setNewField(p => ({ ...p, field_key: e.target.value.toLowerCase().replace(/\s+/g, "_") }))} />
+                    <p style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: 3 }}>{t.schema.fieldKeyHint}</p>
+                  </div>
+                  <div>
+                    <label style={s.ingestLabel}>{t.schema.fieldLabel}</label>
+                    <input type="text" placeholder={t.schema.fieldLabelPlaceholder} style={s.ingestInput}
+                      value={newField.label}
+                      onChange={e => setNewField(p => ({ ...p, label: e.target.value }))} />
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <div>
+                    <label style={s.ingestLabel}>{t.schema.fieldType}</label>
+                    <select title={t.schema.fieldType} style={{ ...s.ingestInput, cursor: "pointer" }}
+                      value={newField.field_type}
+                      onChange={e => setNewField(p => ({ ...p, field_type: e.target.value }))}>
+                      {Object.entries(t.schema.fieldTypes).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={s.ingestLabel}>{t.schema.position}</label>
+                    <input type="number" title={t.schema.position} placeholder="0" style={s.ingestInput} min={0} value={newField.position}
+                      onChange={e => setNewField(p => ({ ...p, position: Number(e.target.value) }))} />
+                  </div>
+                  <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 2 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: "0.82rem", color: "var(--text-secondary)" }}>
+                      <input type="checkbox" checked={newField.required} style={{ accentColor: "var(--accent)", width: 16, height: 16 }}
+                        onChange={e => setNewField(p => ({ ...p, required: e.target.checked }))} />
+                      {t.schema.required}
+                    </label>
+                  </div>
+                </div>
+                <button onClick={handleAddField} disabled={schemaLoading || !newField.field_key || !newField.label}
+                  style={{ ...s.ingestBtn, opacity: schemaLoading || !newField.field_key || !newField.label ? 0.6 : 1 }}>
+                  {schemaLoading ? t.schema.saving : t.schema.addField}
+                </button>
+              </div>
+            </div>
           </div>
         ) : tab === "audit" ? (
           /* ── COMPLIANCE HUB ── */
