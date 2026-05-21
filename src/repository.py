@@ -478,6 +478,12 @@ _DEFAULT_SCHEMA: list[dict] = [
     {"field_key": "cpf",   "label": "CPF/CNPJ", "field_type": "cpf",   "required": True,  "position": 2, "validation_rules": {}},
 ]
 
+PLAN_LIMITS: dict[str, int] = {
+    "starter":    5,
+    "pro":        15,
+    "enterprise": 999,
+}
+
 
 def get_tenant_schema(tenant_id: str) -> list[dict]:
     if USE_SUPABASE:
@@ -533,6 +539,45 @@ def upsert_field_schema(tenant_id: str, field: dict) -> None:
              1 if field.get("required", True) else 0, field.get("position", 0),
              json.dumps(field.get("validation_rules", {}))),
         )
+
+
+def get_tenant_plan(tenant_id: str) -> str:
+    """Returns the tenant's plan name ('starter', 'pro', 'enterprise'). Defaults to 'starter'."""
+    if USE_SUPABASE:
+        try:
+            resp = _http.get(
+                f"{_SUPABASE_URL}/rest/v1/tenants",
+                params={"select": "plan", "id": f"eq.{tenant_id}"},
+                headers=_HEADERS, timeout=10,
+            )
+            resp.raise_for_status()
+            rows = resp.json()
+            return (rows[0].get("plan") or "starter") if rows else "starter"
+        except Exception:
+            return "starter"
+    return "starter"
+
+
+def count_field_schemas(tenant_id: str) -> int:
+    """Returns the number of custom fields configured for a tenant (excludes built-in defaults)."""
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
+            params={"select": "id", "tenant_id": f"eq.{tenant_id}"},
+            headers={**_HEADERS, "Prefer": "count=exact"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        cr = resp.headers.get("Content-Range", "/0")
+        total = cr.split("/")[-1]
+        return int(total) if total.lstrip("-").isdigit() else len(resp.json())
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM tenant_field_schemas WHERE tenant_id = ?", (tenant_id,)
+            ).fetchone()
+            return row[0] if row else 0
+    return 0
 
 
 def delete_field_schema(tenant_id: str, field_key: str) -> int:
