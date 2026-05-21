@@ -13,6 +13,12 @@ type QueueItem      = { name: string; email_hint: string; cpf_hint: string };
 type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown> };
 type PlanInfo       = { plan: string; field_limit: number; field_count: number };
 type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null };
+type SubscriptionInfo = {
+  plan: string; effective_plan: string;
+  status: string; // trialing | active | expired | canceled | free
+  trial_ends_at: string | null; trial_days_left: number | null;
+  stripe_customer_id: string | null; stripe_subscription_id: string | null;
+};
 type SecretEntry   = { key_name: string; updated_at: string };
 type DiagnosisResult = {
   campo_afetado: string;
@@ -66,7 +72,7 @@ function MoonIcon() {
 export default function DashboardClient({ token, userName }: { token: string; userName: string }) {
   const router = useRouter();
   const { t } = useTranslation();
-  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "schema" | "audit" | "admin">("dashboard");
+  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "schema" | "audit" | "admin" | "subscription">("dashboard");
   const [db,        setDb]        = useState<CleanRecord[]>([]);
   const [queue,     setQueue]     = useState<QueueItem[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -105,6 +111,10 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [editPlan,      setEditPlan]      = useState<Record<string, PlanConfig>>({});
   const [syncingStripe, setSyncingStripe] = useState(false);
   const [stripeSyncDone, setStripeSyncDone] = useState(false);
+  const [subscription,  setSubscription]  = useState<SubscriptionInfo | null>(null);
+  const [publicPlans,   setPublicPlans]   = useState<PlanConfig[]>([]);
+  const [subLoading,    setSubLoading]    = useState(false);
+  const [subBanner,     setSubBanner]     = useState<"success" | "canceled" | null>(null);
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [csvMapStep,    setCsvMapStep]    = useState<"upload" | "map" | "ready">("upload");
   const [apiKeys,       setApiKeys]       = useState<{ id: number; label: string | null; created_at: string }[]>([]);
@@ -184,6 +194,22 @@ export default function DashboardClient({ token, userName }: { token: string; us
   }, [router, t]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const sub = params.get("sub");
+    if (sub === "success" || sub === "canceled") {
+      setSubBanner(sub as "success" | "canceled");
+      setTab("subscription");
+      window.history.replaceState({}, "", "/dashboard");
+      setTimeout(() => setSubBanner(null), 6000);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "subscription") fetchSubscription();
+  }, [tab, fetchSubscription]);
 
   const fetchSettings = useCallback(async () => {
     const h = await getFreshHeaders();
@@ -369,6 +395,49 @@ export default function DashboardClient({ token, userName }: { token: string; us
       }
     } catch { /* ignore */ }
     finally { setSyncingStripe(false); }
+  }
+
+  const fetchSubscription = useCallback(async () => {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    try {
+      const [subRes, plansRes] = await Promise.all([
+        apiFetch(`${API}/subscription`, { headers: h }),
+        apiFetch(`${API}/plans`, { headers: h }),
+      ]);
+      if (subRes.ok)   setSubscription(await subRes.json());
+      if (plansRes.ok) setPublicPlans(await plansRes.json());
+    } catch { /* ignore */ }
+  }, []);
+
+  async function handleCheckout(plan_name: string) {
+    setSubLoading(true);
+    const h = await getFreshHeaders();
+    if (!h) { setSubLoading(false); return; }
+    try {
+      const res = await apiFetch(`${API}/subscription/checkout`, {
+        method: "POST", headers: h, body: JSON.stringify({ plan_name }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        window.location.href = data.checkout_url;
+      }
+    } catch { /* ignore */ }
+    finally { setSubLoading(false); }
+  }
+
+  async function handlePortal() {
+    setSubLoading(true);
+    const h = await getFreshHeaders();
+    if (!h) { setSubLoading(false); return; }
+    try {
+      const res = await apiFetch(`${API}/subscription/portal`, { method: "POST", headers: h });
+      if (res.ok) {
+        const data = await res.json();
+        window.location.href = data.portal_url;
+      }
+    } catch { /* ignore */ }
+    finally { setSubLoading(false); }
   }
 
   function autoMapColumns(columns: string[], currentSchema: FieldSchema[]): Record<string, string> {
@@ -821,6 +890,9 @@ export default function DashboardClient({ token, userName }: { token: string; us
             </button>
             <button onClick={() => setTab("audit")} style={tab === "audit" ? s.tabActive : s.tabInactive}>
               {t.audit.tab}
+            </button>
+            <button onClick={() => setTab("subscription")} style={tab === "subscription" ? s.tabActive : s.tabInactive}>
+              {t.subscription.tab}
             </button>
             {isSuperAdmin && (
               <button onClick={() => { setTab("admin" as never); if (!adminLoaded) fetchAdminData(); }} style={(tab as string) === "admin" ? s.tabActive : s.tabInactive}>
@@ -1374,6 +1446,120 @@ export default function DashboardClient({ token, userName }: { token: string; us
               </div>
             </div>
           </div>
+        ) : tab === "subscription" ? (
+          /* ── PLANO / SUBSCRIPTION ── */
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Success / canceled banners */}
+            {subBanner === "success" && (
+              <div style={{ padding: "14px 18px", backgroundColor: "var(--success-subtle)", border: "1px solid var(--success)", borderRadius: 10, color: "var(--success-text)", fontSize: "0.86rem", fontWeight: 600 }}>
+                {t.subscription.successBanner}
+              </div>
+            )}
+            {subBanner === "canceled" && (
+              <div style={{ padding: "14px 18px", backgroundColor: "var(--warning-subtle, #fef9ec)", border: "1px solid var(--warning, #f59e0b)", borderRadius: 10, color: "var(--warning-text, #92400e)", fontSize: "0.86rem", fontWeight: 600 }}>
+                {t.subscription.canceledBanner}
+              </div>
+            )}
+
+            {/* Current plan card */}
+            <div style={s.settingsCard}>
+              <p style={s.settingsTitle}>{t.subscription.currentPlan}</p>
+              {!subscription ? (
+                <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>A carregar...</p>
+              ) : (
+                <>
+                  {/* Status badge */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                    <span style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      padding: "5px 14px", borderRadius: 20, fontSize: "0.78rem", fontWeight: 700,
+                      backgroundColor: subscription.status === "active" ? "var(--success-subtle)" :
+                                       subscription.status === "trialing" ? "#fef9ec" : "var(--danger-subtle)",
+                      color: subscription.status === "active" ? "var(--success-text)" :
+                             subscription.status === "trialing" ? "#92400e" : "var(--danger-text)",
+                      border: `1px solid ${subscription.status === "active" ? "var(--success)" : subscription.status === "trialing" ? "#f59e0b" : "var(--danger)"}`,
+                    }}>
+                      {subscription.status === "trialing" && `${t.subscription.trialActive} · ${subscription.trial_days_left ?? 0} ${t.subscription.trialDaysLeft}`}
+                      {subscription.status === "active" && `${(subscription.plan || "").charAt(0).toUpperCase() + (subscription.plan || "").slice(1)} ${t.subscription.active}`}
+                      {subscription.status === "expired" && t.subscription.trialExpired}
+                      {subscription.status === "canceled" && t.subscription.canceled}
+                      {subscription.status === "free" && t.subscription.free}
+                    </span>
+                  </div>
+
+                  {/* Description */}
+                  <p style={{ fontSize: "0.84rem", color: "var(--text-secondary)", marginBottom: 18, lineHeight: 1.6 }}>
+                    {subscription.status === "trialing" ? t.subscription.trialDesc :
+                     subscription.status === "active"   ? t.subscription.activeDesc :
+                     subscription.status === "expired"  ? t.subscription.trialExpiredDesc :
+                     t.subscription.freeDesc}
+                  </p>
+
+                  {/* Action buttons */}
+                  <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 10 }}>
+                    {subscription.status === "active" ? (
+                      <button onClick={handlePortal} disabled={subLoading}
+                        style={{ ...s.ingestBtn, opacity: subLoading ? 0.6 : 1 }}>
+                        {subLoading ? t.subscription.redirectingPortal : t.subscription.manageSubscription}
+                      </button>
+                    ) : (
+                      <>
+                        {(publicPlans.find(p => p.plan_name === "pro")?.stripe_price_id) && (
+                          <button onClick={() => handleCheckout("pro")} disabled={subLoading}
+                            style={{ ...s.ingestBtn, opacity: subLoading ? 0.6 : 1 }}>
+                            {subLoading ? t.subscription.redirectingCheckout : `${t.subscription.subscribePro} · R$${publicPlans.find(p => p.plan_name === "pro")?.price_monthly ?? 49}${t.subscription.perMonth}`}
+                          </button>
+                        )}
+                        {(publicPlans.find(p => p.plan_name === "enterprise")?.stripe_price_id) && (
+                          <button onClick={() => handleCheckout("enterprise")} disabled={subLoading}
+                            style={{ ...s.ingestBtn, backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", border: "1px solid var(--border)", opacity: subLoading ? 0.6 : 1 }}>
+                            {subLoading ? t.subscription.redirectingCheckout : `${t.subscription.subscribeEnterprise} · R$${publicPlans.find(p => p.plan_name === "enterprise")?.price_monthly ?? 199}${t.subscription.perMonth}`}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Plan comparison table */}
+            <div style={s.settingsCard}>
+              <p style={s.settingsTitle}>{t.subscription.compareTitle}</p>
+              <div style={{ overflowX: "auto" as const }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: "0.83rem" }}>
+                  <thead>
+                    <tr>
+                      {["", "Starter", "Pro", "Enterprise"].map(h => (
+                        <th key={h} style={{ padding: "8px 14px", textAlign: h === "" ? "left" as const : "center" as const, color: "var(--text-secondary)", fontWeight: 600, borderBottom: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)" }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { label: t.subscription.price,      vals: [`${t.subscription.freePrice}`, `R$${publicPlans.find(p=>p.plan_name==="pro")?.price_monthly??49}${t.subscription.perMonth}`, `R$${publicPlans.find(p=>p.plan_name==="enterprise")?.price_monthly??199}${t.subscription.perMonth}`] },
+                      { label: t.subscription.fieldLimit, vals: [`${publicPlans.find(p=>p.plan_name==="starter")?.field_limit??5}`, `${publicPlans.find(p=>p.plan_name==="pro")?.field_limit??15}`, t.subscription.unlimited] },
+                      { label: t.subscription.feat_lgpd,  vals: ["✓", "✓", "✓"] },
+                      { label: t.subscription.feat_fields,vals: ["✓", "✓", "✓"] },
+                      { label: t.subscription.feat_webhook,vals: ["—", "✓", "✓"] },
+                      { label: t.subscription.feat_bulk,  vals: ["—", "✓", "✓"] },
+                      { label: t.subscription.feat_support,vals: ["—", "—", "✓"] },
+                    ].map((row, i) => (
+                      <tr key={i} style={{ backgroundColor: i % 2 === 0 ? "transparent" : "var(--bg-surface-2)" }}>
+                        <td style={{ padding: "9px 14px", color: "var(--text-primary)", fontWeight: 500 }}>{row.label}</td>
+                        {row.vals.map((v, j) => (
+                          <td key={j} style={{ padding: "9px 14px", textAlign: "center" as const, color: v === "—" ? "var(--text-muted)" : v === "✓" ? "var(--success-text)" : "var(--text-primary)", fontWeight: v === "✓" ? 600 : 400 }}>{v}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
         ) : tab === "admin" ? (
           /* ── SUPER ADMIN ── */
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
