@@ -15,7 +15,7 @@ import anthropic
 import requests as _req
 from typing import Optional
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
@@ -701,6 +701,23 @@ def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
     return repository.get_tenant_schema(tenant_id)
 
 
+@_router.post("/admin/stripe/sync", summary="Sincroniza preços dos planos com o Stripe [super admin]",
+              dependencies=[Depends(_require_super_admin)])
+def sincronizar_stripe():
+    stripe_key = os.environ.get("STRIPE_SECRET_KEY", "")
+    if not stripe_key:
+        encrypted = repository.get_secret_encrypted("STRIPE_SECRET_KEY")
+        if encrypted:
+            stripe_key = _decrypt(encrypted)
+    if not stripe_key:
+        raise HTTPException(status_code=503, detail="STRIPE_SECRET_KEY não configurada no servidor ou no cofre.")
+    try:
+        updated = repository.sync_stripe_plans(stripe_key)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Erro ao sincronizar com Stripe: {e}")
+    return {"synced": len(updated), "plans": updated}
+
+
 @_router.delete("/schema/fields/{field_key}", status_code=status.HTTP_204_NO_CONTENT,
                 summary="Remove um campo do schema do tenant")
 def remover_campo(field_key: str, tenant_id: str = Depends(_get_tenant_id)):
@@ -713,6 +730,48 @@ def remover_campo(field_key: str, tenant_id: str = Depends(_get_tenant_id)):
                 summary="Limpa o estado da sessão (útil para testes)")
 def resetar_estado(painel: PainelOrquestracao = Depends(_get_painel)):
     painel.limpar_tudo()
+
+
+@app.post("/stripe/webhook", include_in_schema=False)
+async def stripe_webhook(request: Request):
+    import stripe as _stripe
+    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    if not webhook_secret:
+        return JSONResponse({"status": "no_webhook_secret_configured"})
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    try:
+        event = _stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Webhook signature inválida.")
+
+    event_type = event.get("type", "")
+    if event_type in ("price.updated", "price.created"):
+        price_obj = event["data"]["object"]
+        product_id = price_obj.get("product")
+        if product_id:
+            stripe_key = os.environ.get("STRIPE_SECRET_KEY", "")
+            if not stripe_key:
+                try:
+                    enc = repository.get_secret_encrypted("STRIPE_SECRET_KEY")
+                    if enc:
+                        stripe_key = _decrypt(enc)
+                except Exception:
+                    pass
+            if stripe_key:
+                _stripe.api_key = stripe_key
+                try:
+                    product = _stripe.Product.retrieve(product_id)
+                    plan_name = (product.metadata or {}).get("plan_name")
+                    if plan_name:
+                        amount_brl = (price_obj.get("unit_amount") or 0) / 100.0
+                        field_limit = repository.get_plan_field_limit(plan_name)
+                        repository.upsert_plan_config(plan_name, field_limit, amount_brl, price_obj["id"])
+                except Exception:
+                    pass
+
+    return JSONResponse({"received": True})
 
 
 app.include_router(_router)
