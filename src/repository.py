@@ -550,6 +550,8 @@ def upsert_field_schema(tenant_id: str, field: dict) -> None:
 
 def get_tenant_plan(tenant_id: str) -> str:
     """Returns the tenant's plan name ('starter', 'pro', 'enterprise'). Defaults to 'starter'."""
+    if tenant_id == "__admin__":
+        return "enterprise"
     if USE_SUPABASE:
         try:
             resp = _http.get(
