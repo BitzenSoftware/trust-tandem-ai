@@ -320,6 +320,23 @@ class SecretIn(BaseModel):
     value: str
 
 
+class CheckoutIn(BaseModel):
+    plan_name: str
+
+
+def _get_stripe_key() -> str:
+    """Returns Stripe secret key from env var or encrypted vault."""
+    key = os.environ.get("STRIPE_SECRET_KEY", "")
+    if not key:
+        try:
+            enc = repository.get_secret_encrypted("STRIPE_SECRET_KEY")
+            if enc:
+                key = _decrypt(enc)
+        except Exception:
+            pass
+    return key
+
+
 # --- ROTAS ---
 
 @_router.post("/ingest", response_model=RespostaIngestao, status_code=status.HTTP_202_ACCEPTED,
@@ -701,6 +718,74 @@ def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
     return repository.get_tenant_schema(tenant_id)
 
 
+@_router.get("/plans", summary="Retorna configuração pública de planos (preços e limites)")
+def listar_planos_publico(tenant_id: str = Depends(_get_tenant_id)):
+    return repository.get_plan_configs()
+
+
+@_router.get("/subscription", summary="Retorna status de subscrição do tenant autenticado")
+def obter_subscricao(tenant_id: str = Depends(_get_tenant_id)):
+    repository.ensure_trial_and_upsert(tenant_id)
+    return repository.get_tenant_subscription(tenant_id)
+
+
+@_router.post("/subscription/checkout", summary="Cria sessão Stripe Checkout para assinar um plano")
+def criar_checkout(body: CheckoutIn, tenant_id: str = Depends(_get_tenant_id)):
+    import stripe as _stripe
+    stripe_key = _get_stripe_key()
+    if not stripe_key:
+        raise HTTPException(status_code=503, detail="Stripe não configurado no servidor.")
+    _stripe.api_key = stripe_key
+
+    configs = repository.get_plan_configs()
+    plan_cfg = next((c for c in configs if c["plan_name"] == body.plan_name), None)
+    if not plan_cfg or not plan_cfg.get("stripe_price_id"):
+        raise HTTPException(status_code=400, detail=f"Price ID para o plano '{body.plan_name}' não configurado.")
+
+    sub_info = repository.get_tenant_subscription(tenant_id)
+    customer_id = sub_info.get("stripe_customer_id")
+    frontend_url = os.environ.get("FRONTEND_URL", "https://trust-tandem-ai.vercel.app")
+
+    try:
+        kwargs: dict = {
+            "mode": "subscription",
+            "line_items": [{"price": plan_cfg["stripe_price_id"], "quantity": 1}],
+            "metadata": {"tenant_id": tenant_id, "plan_name": body.plan_name},
+            "success_url": f"{frontend_url}/dashboard?sub=success",
+            "cancel_url": f"{frontend_url}/dashboard?sub=canceled",
+        }
+        if customer_id:
+            kwargs["customer"] = customer_id
+        session = _stripe.checkout.Session.create(**kwargs)
+        return {"checkout_url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Erro ao criar checkout: {e}")
+
+
+@_router.post("/subscription/portal", summary="Cria sessão do portal Stripe para gerir subscrição")
+def criar_portal(tenant_id: str = Depends(_get_tenant_id)):
+    import stripe as _stripe
+    stripe_key = _get_stripe_key()
+    if not stripe_key:
+        raise HTTPException(status_code=503, detail="Stripe não configurado no servidor.")
+    _stripe.api_key = stripe_key
+
+    sub_info = repository.get_tenant_subscription(tenant_id)
+    customer_id = sub_info.get("stripe_customer_id")
+    if not customer_id:
+        raise HTTPException(status_code=400, detail="Sem subscrição ativa para gerir.")
+
+    frontend_url = os.environ.get("FRONTEND_URL", "https://trust-tandem-ai.vercel.app")
+    try:
+        session = _stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=f"{frontend_url}/dashboard",
+        )
+        return {"portal_url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Erro ao criar portal: {e}")
+
+
 @_router.post("/admin/stripe/sync", summary="Sincroniza preços dos planos com o Stripe [super admin]",
               dependencies=[Depends(_require_super_admin)])
 def sincronizar_stripe():
@@ -747,29 +832,66 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Webhook signature inválida.")
 
     event_type = event.get("type", "")
+    stripe_key = _get_stripe_key()
+    if stripe_key:
+        _stripe.api_key = stripe_key
+
     if event_type in ("price.updated", "price.created"):
         price_obj = event["data"]["object"]
         product_id = price_obj.get("product")
-        if product_id:
-            stripe_key = os.environ.get("STRIPE_SECRET_KEY", "")
-            if not stripe_key:
-                try:
-                    enc = repository.get_secret_encrypted("STRIPE_SECRET_KEY")
-                    if enc:
-                        stripe_key = _decrypt(enc)
-                except Exception:
-                    pass
-            if stripe_key:
-                _stripe.api_key = stripe_key
-                try:
-                    product = _stripe.Product.retrieve(product_id)
-                    plan_name = (product.metadata or {}).get("plan_name")
-                    if plan_name:
-                        amount_brl = (price_obj.get("unit_amount") or 0) / 100.0
-                        field_limit = repository.get_plan_field_limit(plan_name)
-                        repository.upsert_plan_config(plan_name, field_limit, amount_brl, price_obj["id"])
-                except Exception:
-                    pass
+        if product_id and stripe_key:
+            try:
+                product = _stripe.Product.retrieve(product_id)
+                plan_name = (product.metadata or {}).get("plan_name")
+                if plan_name:
+                    amount_brl = (price_obj.get("unit_amount") or 0) / 100.0
+                    field_limit = repository.get_plan_field_limit(plan_name)
+                    repository.upsert_plan_config(plan_name, field_limit, amount_brl, price_obj["id"])
+            except Exception:
+                pass
+
+    elif event_type == "checkout.session.completed":
+        session_obj = event["data"]["object"]
+        meta = session_obj.get("metadata") or {}
+        t_id = meta.get("tenant_id")
+        plan_name = meta.get("plan_name")
+        if t_id and plan_name:
+            repository.update_tenant_subscription(
+                t_id, plan_name, "active",
+                stripe_customer_id=session_obj.get("customer"),
+                stripe_subscription_id=session_obj.get("subscription"),
+            )
+
+    elif event_type in ("customer.subscription.updated", "customer.subscription.created"):
+        sub_obj = event["data"]["object"]
+        cust_id = sub_obj.get("customer")
+        if cust_id:
+            t_id = repository.get_tenant_by_stripe_customer(cust_id)
+            if t_id:
+                new_status = sub_obj.get("status", "active")
+                items = (sub_obj.get("items") or {}).get("data") or []
+                plan_name = None
+                if items:
+                    price_id = (items[0].get("price") or {}).get("id")
+                    if price_id:
+                        configs = repository.get_plan_configs()
+                        cfg = next((c for c in configs if c.get("stripe_price_id") == price_id), None)
+                        if cfg:
+                            plan_name = cfg["plan_name"]
+                if plan_name:
+                    mapped = "active" if new_status == "active" else new_status
+                    repository.update_tenant_subscription(
+                        t_id, plan_name, mapped,
+                        stripe_subscription_id=sub_obj.get("id"),
+                    )
+
+    elif event_type == "customer.subscription.deleted":
+        sub_obj = event["data"]["object"]
+        cust_id = sub_obj.get("customer")
+        if cust_id:
+            t_id = repository.get_tenant_by_stripe_customer(cust_id)
+            if t_id:
+                repository.update_tenant_subscription(t_id, "starter", "canceled")
 
     return JSONResponse({"received": True})
 
