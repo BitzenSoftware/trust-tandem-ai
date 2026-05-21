@@ -312,7 +312,8 @@ def resolver_registro(cliente: ClienteInput, painel: PainelOrquestracao = Depend
 
 
 @_router.post("/bulk-resolve", response_model=BulkResolveReport,
-              summary="Resolve em lote registros da fila — único round-trip HTTP, N operações DB")
+              summary="Resolve em lote registros da fila — único round-trip HTTP, N operações DB",
+              dependencies=[Depends(_rate_limit)])
 def bulk_resolver(payload: BulkResolveInput, painel: PainelOrquestracao = Depends(_get_painel)):
     queue_index = {r["name"]: r for r in painel.fila_revisao}
     wh = repository.get_webhook(painel.tenant_id)
