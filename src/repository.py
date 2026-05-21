@@ -903,18 +903,30 @@ def sync_stripe_plans(stripe_secret_key: str) -> list[dict]:
     best: dict[str, dict] = {}
     prices = _stripe.Price.list(active=True, expand=["data.product"], limit=100)
     for price in prices.auto_paging_iter():
-        product = price.product
-        meta = getattr(product, "metadata", None) or {}
-        plan_name = meta.get("plan_name")
-        if not plan_name:
+        try:
+            product = price.product
+            if isinstance(product, str) or product is None:
+                continue  # not expanded — skip
+            # Convert metadata to plain dict regardless of Stripe SDK version
+            raw_meta = getattr(product, "metadata", None)
+            try:
+                meta: dict = dict(raw_meta) if raw_meta else {}
+            except Exception:
+                meta = {}
+            plan_name = meta.get("plan_name")
+            if not plan_name:
+                continue
+            created = getattr(price, "created", 0) or 0
+            existing = best.get(plan_name)
+            if existing is None or created > existing["created"]:
+                best[plan_name] = {
+                    "price_id": price.id,
+                    "amount": (getattr(price, "unit_amount", None) or 0) / 100.0,
+                    "created": created,
+                }
+        except Exception as inner_exc:
+            logger.warning("sync_stripe_plans: skipping price %s — %s", getattr(price, "id", "?"), inner_exc)
             continue
-        existing = best.get(plan_name)
-        if existing is None or price.created > existing["created"]:
-            best[plan_name] = {
-                "price_id": price.id,
-                "amount": (price.unit_amount or 0) / 100.0,
-                "created": price.created,
-            }
 
     updated = []
     for plan_name, info in best.items():
