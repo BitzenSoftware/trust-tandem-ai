@@ -1,5 +1,6 @@
 import base64
 import json
+from cryptography.fernet import Fernet, InvalidToken
 import os
 import re
 import sys
@@ -41,6 +42,27 @@ else:
 
 
 _SUPER_ADMIN_EMAIL = os.environ.get("SUPER_ADMIN_EMAIL", "bitzensoftware@bitzen.app")
+
+_MASTER_KEY_RAW = os.environ.get("MASTER_ENCRYPTION_KEY", "")
+try:
+    _fernet: Fernet | None = Fernet(_MASTER_KEY_RAW.encode()) if _MASTER_KEY_RAW else None
+except Exception:
+    _fernet = None
+
+
+def _encrypt(value: str) -> str:
+    if not _fernet:
+        raise HTTPException(status_code=503, detail="MASTER_ENCRYPTION_KEY não configurada no servidor.")
+    return _fernet.encrypt(value.encode()).decode()
+
+
+def _decrypt(encrypted: str) -> str:
+    if not _fernet:
+        raise HTTPException(status_code=503, detail="MASTER_ENCRYPTION_KEY não configurada no servidor.")
+    try:
+        return _fernet.decrypt(encrypted.encode()).decode()
+    except InvalidToken:
+        raise HTTPException(status_code=500, detail="Falha ao desencriptar. Chave mestra inválida ou dados corrompidos.")
 
 
 def _get_tenant_id(
@@ -164,6 +186,12 @@ def _get_operator_email(
     return "system"
 
 
+def _require_super_admin(tenant_id: str = Depends(_get_tenant_id)) -> str:
+    if tenant_id != "__admin__":
+        raise HTTPException(status_code=403, detail="Acesso restrito ao super administrador.")
+    return tenant_id
+
+
 app = FastAPI(
     title="Trust & Tandem AI Gateway",
     description="API segura de ingestão de dados em conformidade com LGPD — Orquestração Humano-IA",
@@ -279,6 +307,17 @@ class BulkResolveReport(BaseModel):
     errors: int
     webhooks_fired: int
     details: list[BulkResolveDetail]
+
+
+class PlanConfigIn(BaseModel):
+    field_limit: int
+    price_monthly: float = 0.0
+    stripe_price_id: Optional[str] = None
+
+
+class SecretIn(BaseModel):
+    key_name: str
+    value: str
 
 
 # --- ROTAS ---
@@ -570,10 +609,66 @@ def obter_schema(tenant_id: str = Depends(_get_tenant_id)):
     return repository.get_tenant_schema(tenant_id)
 
 
+@_router.get("/admin/profile", summary="Retorna perfil e papel do utilizador autenticado")
+def admin_profile(
+    creds: HTTPAuthorizationCredentials | None = Security(_bearer),
+    tenant_id: str = Depends(_get_tenant_id),
+):
+    email = _decode_jwt_email(creds.credentials) if creds else ""
+    return {"is_super_admin": tenant_id == "__admin__", "email": email}
+
+
+@_router.get("/admin/plans", summary="Lista configurações de planos [super admin]",
+             dependencies=[Depends(_require_super_admin)])
+def listar_planos_admin():
+    return repository.get_plan_configs()
+
+
+@_router.put("/admin/plans/{plan_name}", summary="Actualiza configuração de um plano [super admin]",
+             dependencies=[Depends(_require_super_admin)])
+def atualizar_plano(plan_name: str, body: PlanConfigIn):
+    repository.upsert_plan_config(plan_name, body.field_limit, body.price_monthly, body.stripe_price_id)
+    return repository.get_plan_configs()
+
+
+@_router.get("/admin/secrets", summary="Lista chaves secretas armazenadas [super admin]",
+             dependencies=[Depends(_require_super_admin)])
+def listar_secrets_admin():
+    return repository.list_secrets()
+
+
+@_router.post("/admin/secrets", status_code=status.HTTP_201_CREATED,
+              summary="Guarda ou actualiza uma chave secreta encriptada [super admin]",
+              dependencies=[Depends(_require_super_admin)])
+def salvar_secret(body: SecretIn):
+    encrypted = _encrypt(body.value)
+    repository.upsert_secret(body.key_name, encrypted)
+    return {"key_name": body.key_name, "status": "saved"}
+
+
+@_router.get("/admin/secrets/{key_name}/reveal",
+             summary="Desencripta e devolve o valor de uma chave secreta [super admin]",
+             dependencies=[Depends(_require_super_admin)])
+def revelar_secret(key_name: str):
+    encrypted = repository.get_secret_encrypted(key_name)
+    if not encrypted:
+        raise HTTPException(status_code=404, detail=f"Chave '{key_name}' não encontrada.")
+    return {"key_name": key_name, "value": _decrypt(encrypted)}
+
+
+@_router.delete("/admin/secrets/{key_name}", status_code=status.HTTP_204_NO_CONTENT,
+                summary="Remove uma chave secreta [super admin]",
+                dependencies=[Depends(_require_super_admin)])
+def deletar_secret(key_name: str):
+    deleted = repository.delete_secret(key_name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Chave '{key_name}' não encontrada.")
+
+
 @_router.get("/plan", summary="Retorna o plano e limite de campos do tenant")
 def obter_plano(tenant_id: str = Depends(_get_tenant_id)):
     plan = repository.get_tenant_plan(tenant_id)
-    limit = repository.PLAN_LIMITS.get(plan, 5)
+    limit = repository.get_plan_field_limit(plan)
     count = repository.count_field_schemas(tenant_id)
     return {"plan": plan, "field_limit": limit, "field_count": count}
 
@@ -588,7 +683,7 @@ def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
     existing_keys = {f["field_key"] for f in current_schema}
     if body.field_key not in existing_keys:
         plan = repository.get_tenant_plan(tenant_id)
-        limit = repository.PLAN_LIMITS.get(plan, 5)
+        limit = repository.get_plan_field_limit(plan)
         count = repository.count_field_schemas(tenant_id)
         if count >= limit:
             raise HTTPException(
