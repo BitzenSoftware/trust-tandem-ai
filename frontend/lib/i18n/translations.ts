@@ -180,6 +180,9 @@ export const translations = {
       ignore: "(ignore)",
       confirmMap: "Confirm mapping & process",
       autoMapped: "auto",
+      customFields: "custom fields",
+      limitReached: "Field limit reached for this plan. Contact us to upgrade.",
+      upgrade: "Upgrade plan",
     },
     audit: {
       tab: "Compliance",
@@ -387,6 +390,9 @@ export const translations = {
       ignore: "(ignorar)",
       confirmMap: "Confirmar mapeamento e processar",
       autoMapped: "auto",
+      customFields: "campos personalizados",
+      limitReached: "Limite de campos atingido para este plano. Entre em contato para fazer upgrade.",
+      upgrade: "Fazer upgrade",
     },
     audit: {
       tab: "Compliance",
