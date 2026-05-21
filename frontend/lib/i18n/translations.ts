@@ -237,6 +237,9 @@ export const translations = {
       confirmDelete: "Delete this key?",
       updatedAt: "Updated",
       suggestedKeys: "Suggested keys",
+      syncStripe: "Sync with Stripe",
+      syncing: "Syncing...",
+      syncDone: "Synced!",
     },
   },
   "pt-BR": {
@@ -475,6 +478,9 @@ export const translations = {
       confirmDelete: "Apagar esta chave?",
       updatedAt: "Atualizado",
       suggestedKeys: "Chaves sugeridas",
+      syncStripe: "Sincronizar com Stripe",
+      syncing: "A sincronizar...",
+      syncDone: "Sincronizado!",
     },
   },
 };
