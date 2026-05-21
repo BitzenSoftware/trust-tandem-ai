@@ -103,6 +103,8 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [showNewSecretValue, setShowNewSecretValue] = useState(false);
   const [adminLoaded,   setAdminLoaded]   = useState(false);
   const [editPlan,      setEditPlan]      = useState<Record<string, PlanConfig>>({});
+  const [syncingStripe, setSyncingStripe] = useState(false);
+  const [stripeSyncDone, setStripeSyncDone] = useState(false);
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [csvMapStep,    setCsvMapStep]    = useState<"upload" | "map" | "ready">("upload");
   const [apiKeys,       setApiKeys]       = useState<{ id: number; label: string | null; created_at: string }[]>([]);
@@ -263,6 +265,21 @@ export default function DashboardClient({ token, userName }: { token: string; us
     }
     if (secretsRes.ok) setSecrets(await secretsRes.json());
     setAdminLoaded(true);
+    // Auto-sync Stripe prices in background — silently updates plan configs if key is configured
+    apiFetch(`${API}/admin/stripe/sync`, { method: "POST", headers: h })
+      .then(async res => {
+        if (res.ok) {
+          const freshRes = await apiFetch(`${API}/admin/plans`, { headers: h });
+          if (freshRes.ok) {
+            const configs: PlanConfig[] = await freshRes.json();
+            setPlanConfigs(configs);
+            const map: Record<string, PlanConfig> = {};
+            configs.forEach(c => { map[c.plan_name] = { ...c }; });
+            setEditPlan(map);
+          }
+        }
+      })
+      .catch(() => {});
   }, []);
 
   async function handleSavePlan(plan_name: string) {
@@ -329,6 +346,29 @@ export default function DashboardClient({ token, userName }: { token: string; us
     await apiFetch(`${API}/admin/secrets/${encodeURIComponent(key_name)}`, { method: "DELETE", headers: h });
     setRevealedKeys(p => { const n = { ...p }; delete n[key_name]; return n; });
     await fetchAdminData();
+  }
+
+  async function handleSyncStripe() {
+    setSyncingStripe(true);
+    setStripeSyncDone(false);
+    const h = await getFreshHeaders();
+    if (!h) { setSyncingStripe(false); return; }
+    try {
+      const res = await apiFetch(`${API}/admin/stripe/sync`, { method: "POST", headers: h });
+      if (res.ok) {
+        const freshRes = await apiFetch(`${API}/admin/plans`, { headers: h });
+        if (freshRes.ok) {
+          const configs: PlanConfig[] = await freshRes.json();
+          setPlanConfigs(configs);
+          const map: Record<string, PlanConfig> = {};
+          configs.forEach(c => { map[c.plan_name] = { ...c }; });
+          setEditPlan(map);
+        }
+        setStripeSyncDone(true);
+        setTimeout(() => setStripeSyncDone(false), 3000);
+      }
+    } catch { /* ignore */ }
+    finally { setSyncingStripe(false); }
   }
 
   function autoMapColumns(columns: string[], currentSchema: FieldSchema[]): Record<string, string> {
@@ -1346,7 +1386,15 @@ export default function DashboardClient({ token, userName }: { token: string; us
             {adminTab === "plans" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                 <div style={s.settingsCard}>
-                  <p style={s.settingsTitle}>{t.admin.plansTitle}</p>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                    <p style={{ ...s.settingsTitle, marginBottom: 0 }}>{t.admin.plansTitle}</p>
+                    <button
+                      onClick={handleSyncStripe}
+                      disabled={syncingStripe}
+                      style={{ ...s.diagnoseBtn, opacity: syncingStripe ? 0.6 : 1 }}>
+                      {stripeSyncDone ? t.admin.syncDone : syncingStripe ? t.admin.syncing : t.admin.syncStripe}
+                    </button>
+                  </div>
                   <p style={s.settingsDesc}>{t.admin.plansSubtitle}</p>
                   <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                     {(planConfigs.length > 0 ? planConfigs : [
