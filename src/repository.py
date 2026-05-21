@@ -749,6 +749,39 @@ def delete_secret(key_name: str) -> int:
     return 0
 
 
+def sync_stripe_plans(stripe_secret_key: str) -> list[dict]:
+    """Fetches active prices from Stripe and updates admin_plan_configs by product metadata."""
+    import stripe as _stripe
+    _stripe.api_key = stripe_secret_key
+
+    best: dict[str, dict] = {}
+    prices = _stripe.Price.list(active=True, expand=["data.product"], limit=100)
+    for price in prices.auto_paging_iter():
+        product = price.product
+        meta = getattr(product, "metadata", None) or {}
+        plan_name = meta.get("plan_name")
+        if not plan_name:
+            continue
+        existing = best.get(plan_name)
+        if existing is None or price.created > existing["created"]:
+            best[plan_name] = {
+                "price_id": price.id,
+                "amount": (price.unit_amount or 0) / 100.0,
+                "created": price.created,
+            }
+
+    updated = []
+    for plan_name, info in best.items():
+        field_limit = get_plan_field_limit(plan_name)
+        upsert_plan_config(plan_name, field_limit, info["amount"], info["price_id"])
+        updated.append({
+            "plan_name": plan_name,
+            "stripe_price_id": info["price_id"],
+            "price_monthly": info["amount"],
+        })
+    return updated
+
+
 def fire_webhook(url: str, secret: str, records: list[dict]) -> None:
     payload = json.dumps({"records": records})
     sig = _hmac.new(secret.encode(), payload.encode(), "sha256").hexdigest()
