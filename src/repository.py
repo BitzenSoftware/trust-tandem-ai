@@ -46,7 +46,8 @@ def init_db() -> None:
                 name       TEXT NOT NULL,
                 email      TEXT NOT NULL,
                 cpf        TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP DEFAULT (datetime('now', '+90 days'))
             )
         """)
         conn.execute("""
@@ -76,6 +77,17 @@ def init_db() -> None:
                 secret     TEXT NOT NULL,
                 active     INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tenant_audit_logs (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id      TEXT NOT NULL DEFAULT 'default',
+                operator_email TEXT NOT NULL,
+                record_name    TEXT NOT NULL,
+                action         TEXT NOT NULL,
+                fields_affected TEXT,
+                created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -194,6 +206,76 @@ def clear_queue(tenant_id: str = "default") -> None:
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
             conn.execute("DELETE FROM review_queue WHERE tenant_id = ?", (tenant_id,))
+
+
+def create_audit_log(
+    tenant_id: str,
+    operator_email: str,
+    record_name: str,
+    action: str,
+    fields_affected: dict | None = None,
+) -> None:
+    """Writes an immutable compliance event. Never raises — audit must not break the main flow."""
+    payload = fields_affected or {}
+    try:
+        if USE_SUPABASE:
+            _http.post(
+                f"{_SUPABASE_URL}/rest/v1/tenant_audit_logs",
+                json={
+                    "tenant_id": tenant_id,
+                    "operator_email": operator_email,
+                    "record_name": record_name,
+                    "action": action,
+                    "fields_affected": payload,
+                },
+                headers=_HEADERS, timeout=10,
+            ).raise_for_status()
+            return
+        _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tenant_audit_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tenant_id TEXT NOT NULL,
+                    operator_email TEXT NOT NULL,
+                    record_name TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    fields_affected TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute(
+                "INSERT INTO tenant_audit_logs (tenant_id, operator_email, record_name, action, fields_affected)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (tenant_id, operator_email, record_name, action, json.dumps(payload)),
+            )
+    except Exception as exc:
+        logger.warning("create_audit_log failed (non-fatal): %s", exc)
+
+
+def list_audit_logs(tenant_id: str, limit: int = 100) -> list[dict]:
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/tenant_audit_logs",
+            params={
+                "select": "id,operator_email,record_name,action,fields_affected,created_at",
+                "tenant_id": f"eq.{tenant_id}",
+                "order": "created_at.desc",
+                "limit": limit,
+            },
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute(
+                "SELECT id, operator_email, record_name, action, fields_affected, created_at"
+                " FROM tenant_audit_logs WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?",
+                (tenant_id, limit),
+            ).fetchall()]
+    return []
 
 
 def purge_expired_queue(tenant_id: str | None = None, days: int = 30) -> int:
