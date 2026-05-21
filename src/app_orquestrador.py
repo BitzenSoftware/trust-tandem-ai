@@ -60,6 +60,16 @@ class PainelOrquestracao:
     def remover_da_fila(self, name: str) -> int:
         return repository.remove_from_queue(name, self.tenant_id)
 
+    def resolver_direto(self, merged: dict) -> None:
+        """Saves directly to clean records with masking — bypasses re-queue logic.
+        Use this for human/AI approvals where we trust the corrections."""
+        from masking import mask_email, mask_cpf
+        repository.save({
+            "name":  merged["name"],
+            "email": mask_email(merged.get("email") or ""),
+            "cpf":   mask_cpf(merged.get("cpf") or ""),
+        }, self.tenant_id)
+
     def limpar_tudo(self) -> None:
         repository.clear(self.tenant_id)
         repository.clear_queue(self.tenant_id)
