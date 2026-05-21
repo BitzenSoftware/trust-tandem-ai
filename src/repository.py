@@ -485,6 +485,14 @@ PLAN_LIMITS: dict[str, int] = {
 }
 
 
+def _merge_with_defaults(custom_rows: list[dict]) -> list[dict]:
+    """Always includes _DEFAULT_SCHEMA fields; custom rows override defaults for same key."""
+    merged = {f["field_key"]: dict(f) for f in _DEFAULT_SCHEMA}
+    for row in custom_rows:
+        merged[row["field_key"]] = row
+    return sorted(merged.values(), key=lambda f: f.get("position", 0))
+
+
 def get_tenant_schema(tenant_id: str) -> list[dict]:
     if USE_SUPABASE:
         resp = _http.get(
@@ -495,7 +503,7 @@ def get_tenant_schema(tenant_id: str) -> list[dict]:
         )
         resp.raise_for_status()
         rows = resp.json()
-        return rows if rows else list(_DEFAULT_SCHEMA)
+        return _merge_with_defaults(rows)
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
@@ -504,17 +512,16 @@ def get_tenant_schema(tenant_id: str) -> list[dict]:
                 " FROM tenant_field_schemas WHERE tenant_id = ? ORDER BY position",
                 (tenant_id,)
             ).fetchall()
-            if rows:
-                result = []
-                for r in rows:
-                    d = dict(r)
-                    try:
-                        d["validation_rules"] = json.loads(d.get("validation_rules") or "{}")
-                    except Exception:
-                        d["validation_rules"] = {}
-                    d["required"] = bool(d["required"])
-                    result.append(d)
-                return result
+            custom = []
+            for r in rows:
+                d = dict(r)
+                try:
+                    d["validation_rules"] = json.loads(d.get("validation_rules") or "{}")
+                except Exception:
+                    d["validation_rules"] = {}
+                d["required"] = bool(d["required"])
+                custom.append(d)
+            return _merge_with_defaults(custom)
     return list(_DEFAULT_SCHEMA)
 
 
@@ -558,12 +565,17 @@ def get_tenant_plan(tenant_id: str) -> str:
     return "starter"
 
 
+_DEFAULT_KEYS = {f["field_key"] for f in _DEFAULT_SCHEMA}
+
+
 def count_field_schemas(tenant_id: str) -> int:
-    """Returns the number of custom fields configured for a tenant (excludes built-in defaults)."""
+    """Counts only non-default custom fields (email and cpf are free baseline, never counted)."""
+    excluded = ",".join(f'"{k}"' for k in _DEFAULT_KEYS)
     if USE_SUPABASE:
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
-            params={"select": "id", "tenant_id": f"eq.{tenant_id}"},
+            params={"select": "id", "tenant_id": f"eq.{tenant_id}",
+                    "field_key": f"not.in.({','.join(_DEFAULT_KEYS)})"},
             headers={**_HEADERS, "Prefer": "count=exact"},
             timeout=10,
         )
@@ -573,8 +585,10 @@ def count_field_schemas(tenant_id: str) -> int:
         return int(total) if total.lstrip("-").isdigit() else len(resp.json())
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
+            placeholders = ",".join("?" * len(_DEFAULT_KEYS))
             row = conn.execute(
-                "SELECT COUNT(*) FROM tenant_field_schemas WHERE tenant_id = ?", (tenant_id,)
+                f"SELECT COUNT(*) FROM tenant_field_schemas WHERE tenant_id = ? AND field_key NOT IN ({placeholders})",
+                (tenant_id, *_DEFAULT_KEYS),
             ).fetchone()
             return row[0] if row else 0
     return 0
