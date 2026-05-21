@@ -41,23 +41,39 @@ def init_db() -> None:
     with sqlite3.connect(_DB_PATH) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS clean_records (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                tenant_id  TEXT NOT NULL DEFAULT 'default',
-                name       TEXT NOT NULL,
-                email      TEXT NOT NULL,
-                cpf        TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP DEFAULT (datetime('now', '+90 days'))
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id    TEXT NOT NULL DEFAULT 'default',
+                name         TEXT NOT NULL,
+                email        TEXT NOT NULL,
+                cpf          TEXT NOT NULL,
+                extra_fields TEXT DEFAULT '{}',
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at   TIMESTAMP DEFAULT (datetime('now', '+90 days'))
             )
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS review_queue (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                tenant_id  TEXT NOT NULL DEFAULT 'default',
-                name       TEXT NOT NULL,
-                email      TEXT,
-                cpf        TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id    TEXT NOT NULL DEFAULT 'default',
+                name         TEXT NOT NULL,
+                email        TEXT,
+                cpf          TEXT,
+                extra_fields TEXT DEFAULT '{}',
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tenant_field_schemas (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id        TEXT NOT NULL DEFAULT 'default',
+                field_key        TEXT NOT NULL,
+                label            TEXT NOT NULL,
+                field_type       TEXT NOT NULL,
+                required         INTEGER DEFAULT 1,
+                position         INTEGER DEFAULT 0,
+                validation_rules TEXT DEFAULT '{}',
+                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(tenant_id, field_key)
             )
         """)
         conn.execute("""
@@ -95,18 +111,20 @@ def init_db() -> None:
 # --- clean_records ---
 
 def save(record: dict, tenant_id: str = "default") -> None:
+    extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf")}
     if USE_SUPABASE:
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/clean_records",
-            json={"tenant_id": tenant_id, "name": record["name"], "email": record["email"], "cpf": record["cpf"]},
+            json={"tenant_id": tenant_id, "name": record["name"], "email": record["email"],
+                  "cpf": record["cpf"], "extra_fields": extra or {}},
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
         return
     with sqlite3.connect(_DB_PATH) as conn:
         conn.execute(
-            "INSERT INTO clean_records (tenant_id, name, email, cpf) VALUES (?, ?, ?, ?)",
-            (tenant_id, record["name"], record["email"], record["cpf"]),
+            "INSERT INTO clean_records (tenant_id, name, email, cpf, extra_fields) VALUES (?, ?, ?, ?, ?)",
+            (tenant_id, record["name"], record["email"], record["cpf"], json.dumps(extra)),
         )
 
 
@@ -144,18 +162,20 @@ def clear(tenant_id: str = "default") -> None:
 # --- review_queue ---
 
 def save_to_queue(record: dict, tenant_id: str = "default") -> None:
+    extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf")}
     if USE_SUPABASE:
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/review_queue",
-            json={"tenant_id": tenant_id, "name": record["name"], "email": record.get("email"), "cpf": record.get("cpf")},
+            json={"tenant_id": tenant_id, "name": record["name"], "email": record.get("email"),
+                  "cpf": record.get("cpf"), "extra_fields": extra or {}},
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
         return
     with sqlite3.connect(_DB_PATH) as conn:
         conn.execute(
-            "INSERT INTO review_queue (tenant_id, name, email, cpf) VALUES (?, ?, ?, ?)",
-            (tenant_id, record["name"], record.get("email"), record.get("cpf")),
+            "INSERT INTO review_queue (tenant_id, name, email, cpf, extra_fields) VALUES (?, ?, ?, ?, ?)",
+            (tenant_id, record["name"], record.get("email"), record.get("cpf"), json.dumps(extra)),
         )
 
 
@@ -163,7 +183,7 @@ def get_queue(tenant_id: str = "default") -> list[dict]:
     if USE_SUPABASE:
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/review_queue",
-            params={"select": "name,email,cpf", "order": "id.asc", "tenant_id": f"eq.{tenant_id}"},
+            params={"select": "name,email,cpf,extra_fields", "order": "id.asc", "tenant_id": f"eq.{tenant_id}"},
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
@@ -171,9 +191,19 @@ def get_queue(tenant_id: str = "default") -> list[dict]:
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        return [dict(r) for r in conn.execute(
-            "SELECT name, email, cpf FROM review_queue WHERE tenant_id = ? ORDER BY id", (tenant_id,)
-        ).fetchall()]
+        rows = conn.execute(
+            "SELECT name, email, cpf, extra_fields FROM review_queue WHERE tenant_id = ? ORDER BY id", (tenant_id,)
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            if d.get("extra_fields"):
+                try:
+                    d["extra_fields"] = json.loads(d["extra_fields"])
+                except Exception:
+                    d["extra_fields"] = {}
+            result.append(d)
+        return result
 
 
 def remove_from_queue(name: str, tenant_id: str = "default") -> int:
@@ -439,6 +469,90 @@ def delete_webhook(tenant_id: str) -> None:
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
             conn.execute("DELETE FROM tenant_webhooks WHERE tenant_id = ?", (tenant_id,))
+
+
+# --- tenant_field_schemas ---
+
+_DEFAULT_SCHEMA: list[dict] = [
+    {"field_key": "email", "label": "E-mail",   "field_type": "email", "required": True,  "position": 1, "validation_rules": {}},
+    {"field_key": "cpf",   "label": "CPF/CNPJ", "field_type": "cpf",   "required": True,  "position": 2, "validation_rules": {}},
+]
+
+
+def get_tenant_schema(tenant_id: str) -> list[dict]:
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
+            params={"select": "field_key,label,field_type,required,position,validation_rules",
+                    "tenant_id": f"eq.{tenant_id}", "order": "position.asc"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows if rows else list(_DEFAULT_SCHEMA)
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT field_key, label, field_type, required, position, validation_rules"
+                " FROM tenant_field_schemas WHERE tenant_id = ? ORDER BY position",
+                (tenant_id,)
+            ).fetchall()
+            if rows:
+                result = []
+                for r in rows:
+                    d = dict(r)
+                    try:
+                        d["validation_rules"] = json.loads(d.get("validation_rules") or "{}")
+                    except Exception:
+                        d["validation_rules"] = {}
+                    d["required"] = bool(d["required"])
+                    result.append(d)
+                return result
+    return list(_DEFAULT_SCHEMA)
+
+
+def upsert_field_schema(tenant_id: str, field: dict) -> None:
+    if USE_SUPABASE:
+        _http.post(
+            f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
+            json={"tenant_id": tenant_id, **field},
+            headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
+            params={"on_conflict": "tenant_id,field_key"}, timeout=10,
+        ).raise_for_status()
+        return
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO tenant_field_schemas (tenant_id, field_key, label, field_type, required, position, validation_rules)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(tenant_id, field_key) DO UPDATE SET"
+            " label=excluded.label, field_type=excluded.field_type, required=excluded.required,"
+            " position=excluded.position, validation_rules=excluded.validation_rules",
+            (tenant_id, field["field_key"], field["label"], field["field_type"],
+             1 if field.get("required", True) else 0, field.get("position", 0),
+             json.dumps(field.get("validation_rules", {}))),
+        )
+
+
+def delete_field_schema(tenant_id: str, field_key: str) -> int:
+    if field_key in ("name",):
+        return 0  # name is always required — cannot be removed
+    if USE_SUPABASE:
+        resp = _http.delete(
+            f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
+            params={"tenant_id": f"eq.{tenant_id}", "field_key": f"eq.{field_key}"},
+            headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
+        )
+        resp.raise_for_status()
+        return len(resp.json())
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            return conn.execute(
+                "DELETE FROM tenant_field_schemas WHERE tenant_id = ? AND field_key = ?",
+                (tenant_id, field_key)
+            ).rowcount
+    return 0
 
 
 def fire_webhook(url: str, secret: str, records: list[dict]) -> None:
