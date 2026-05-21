@@ -100,6 +100,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [copiedSecret,  setCopiedSecret]  = useState<Record<string, boolean>>({});
   const [newSecret,     setNewSecret]     = useState({ key_name: "", value: "" });
   const [secretSaving,  setSecretSaving]  = useState(false);
+  const [showNewSecretValue, setShowNewSecretValue] = useState(false);
   const [adminLoaded,   setAdminLoaded]   = useState(false);
   const [editPlan,      setEditPlan]      = useState<Record<string, PlanConfig>>({});
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
@@ -1440,9 +1441,20 @@ export default function DashboardClient({ token, userName }: { token: string; us
                       </div>
                       <div>
                         <label style={s.ingestLabel}>{t.admin.keyValue}</label>
-                        <input type="password" placeholder="sk-..." style={s.ingestInput}
-                          value={newSecret.value}
-                          onChange={e => setNewSecret(p => ({ ...p, value: e.target.value }))} />
+                        <div style={{ position: "relative" as const }}>
+                          <input
+                            type={showNewSecretValue ? "text" : "password"}
+                            placeholder="sk-..."
+                            style={{ ...s.ingestInput, paddingRight: 44 }}
+                            value={newSecret.value}
+                            onChange={e => setNewSecret(p => ({ ...p, value: e.target.value }))} />
+                          <button
+                            type="button"
+                            onClick={() => setShowNewSecretValue(v => !v)}
+                            style={{ position: "absolute" as const, right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "0.8rem", fontWeight: 600, padding: 0 }}>
+                            {showNewSecretValue ? t.admin.hide : t.admin.reveal}
+                          </button>
+                        </div>
                       </div>
                     </div>
                     <div>
