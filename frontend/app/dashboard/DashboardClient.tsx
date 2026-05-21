@@ -147,12 +147,6 @@ export default function DashboardClient({ token, userName }: { token: string; us
     setLoading(true); setError("");
     const h = await getFreshHeaders();
     if (!h) { router.push("/login"); return; }
-    // Check super admin status
-    const profileRes = await apiFetch(`${API}/admin/profile`, { headers: h });
-    if (profileRes.ok) {
-      const prof = await profileRes.json();
-      setIsSuperAdmin(prof.is_super_admin);
-    }
     // Warm up Render (free tier sleeps; this health ping waits up to 55s)
     const wc = new AbortController();
     const wt = setTimeout(() => wc.abort(), 55000);
@@ -161,10 +155,15 @@ export default function DashboardClient({ token, userName }: { token: string; us
     finally { clearTimeout(wt); }
     // Now fetch data (server should be warm)
     try {
-      const [dbRes, qRes] = await Promise.all([
-        apiFetch(`${API}/database`,     { headers: h }),
-        apiFetch(`${API}/review-queue`, { headers: h }),
+      const [dbRes, qRes, profileRes] = await Promise.all([
+        apiFetch(`${API}/database`,      { headers: h }),
+        apiFetch(`${API}/review-queue`,  { headers: h }),
+        apiFetch(`${API}/admin/profile`, { headers: h }),
       ]);
+      if (profileRes.ok) {
+        const prof = await profileRes.json();
+        setIsSuperAdmin(prof.is_super_admin);
+      }
       if (dbRes.ok) setDb(await dbRes.json());
       else if (dbRes.status === 403) setError(t.dashboard.err403);
       else if (dbRes.status === 401) {
