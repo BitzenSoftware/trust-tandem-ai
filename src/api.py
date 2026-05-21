@@ -193,9 +193,19 @@ _router = APIRouter(prefix="/api/v1", dependencies=[Depends(_get_tenant_id)])
 # --- SCHEMAS ---
 
 class ClienteInput(BaseModel):
+    model_config = {"extra": "allow"}
     name: str = Field(..., examples=["João Errado"])
     email: Optional[str] = Field(None, examples=["joao.silva.com"])
     cpf: Optional[str] = Field(None, examples=["123.ABC.789-XX"])
+
+
+class FieldSchemaIn(BaseModel):
+    field_key: str
+    label: str
+    field_type: str = "text"
+    required: bool = True
+    position: int = 0
+    validation_rules: Optional[dict] = None
 
 
 class RespostaIngestao(BaseModel):
@@ -279,8 +289,9 @@ class BulkResolveReport(BaseModel):
 def ingerir_dados(clientes: list[ClienteInput], painel: PainelOrquestracao = Depends(_get_painel)):
     if not clientes:
         raise HTTPException(status_code=400, detail="A lista de clientes não pode estar vazia.")
+    schema = repository.get_tenant_schema(painel.tenant_id)  # fetch once per batch
     for cliente in clientes:
-        painel.processar_registro(cliente.model_dump())
+        painel.processar_registro(cliente.model_dump(), schema=schema)
     return RespostaIngestao(
         status="Processado",
         mensagem="Lote avaliado pela IA de Compliance.",
@@ -454,16 +465,23 @@ def remover_webhook(tenant_id: str = Depends(_get_tenant_id)):
     repository.delete_webhook(tenant_id)
 
 
-_DIAGNOSIS_SYSTEM = """Você é um especialista em validação de dados cadastrais brasileiros (CPF, CNPJ, e-mail).
-Analise o registro abaixo e retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown, sem texto extra.
-
-Schema obrigatório (todos os campos são strings):
-{
-  "campo_afetado": "email" | "cpf" | "email_e_cpf",
-  "valor_original": "<valor exato com o erro>",
-  "valor_sugerido": "<valor corrigido>",
-  "diagnostico_motivo": "<explicação concisa do erro, máx. 2 linhas>"
-}"""
+def _build_diagnosis_prompt(schema: list[dict]) -> str:
+    fields_desc = "\n".join(
+        f"- {f['label']} (field_key: \"{f['field_key']}\", type: {f['field_type']})"
+        for f in schema
+    )
+    return (
+        "Você é um especialista em validação de dados cadastrais.\n"
+        "Analise o registro abaixo com base nos campos configurados pelo cliente:\n"
+        f"{fields_desc}\n\n"
+        "Retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown:\n"
+        "{\n"
+        '  "campo_afetado": "<field_key do campo com problema>",\n'
+        '  "valor_original": "<valor exato com o erro>",\n'
+        '  "valor_sugerido": "<valor corrigido>",\n'
+        '  "diagnostico_motivo": "<explicação concisa, máx. 2 linhas>"\n'
+        "}"
+    )
 
 
 @_router.get("/analyze/{name}", summary="Diagnóstico estruturado Claude para um registro da fila",
@@ -473,13 +491,18 @@ def analisar_registro(name: str, painel: PainelOrquestracao = Depends(_get_paine
     if not record:
         raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado na fila.")
 
+    schema = repository.get_tenant_schema(painel.tenant_id)
+    extra = record.get("extra_fields") or {}
+    field_lines = "\n".join(
+        f"{f['label']}: {record.get(f['field_key']) or extra.get(f['field_key'], '')}"
+        for f in schema
+    )
     user_msg = (
         f"Nome: {record['name']}\n"
-        f"Email: {record.get('email', '')}\n"
-        f"CPF: {record.get('cpf', '')}\n\n"
+        f"{field_lines}\n\n"
         "Identifique qual campo está inválido e retorne o JSON de diagnóstico."
     )
-    raw = _call_claude(_DIAGNOSIS_SYSTEM, user_msg)
+    raw = _call_claude(_build_diagnosis_prompt(schema), user_msg)
 
     try:
         data = json.loads(raw)
@@ -540,6 +563,35 @@ def purgar_expirados(days: int = 30, tenant_id: str = Depends(_get_tenant_id)):
 @_router.get("/audit-logs", summary="Logs de auditoria e compliance do tenant (ANPD)")
 def listar_audit_logs(limit: int = 100, tenant_id: str = Depends(_get_tenant_id)):
     return repository.list_audit_logs(tenant_id=tenant_id, limit=min(limit, 500))
+
+
+@_router.get("/schema", summary="Retorna o schema de campos do tenant")
+def obter_schema(tenant_id: str = Depends(_get_tenant_id)):
+    return repository.get_tenant_schema(tenant_id)
+
+
+@_router.post("/schema/fields", status_code=status.HTTP_201_CREATED,
+              summary="Adiciona ou actualiza um campo no schema do tenant")
+def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
+    if body.field_key == "name":
+        raise HTTPException(status_code=400, detail="O campo 'name' é reservado e não pode ser configurado.")
+    repository.upsert_field_schema(tenant_id, {
+        "field_key":        body.field_key,
+        "label":            body.label,
+        "field_type":       body.field_type,
+        "required":         body.required,
+        "position":         body.position,
+        "validation_rules": body.validation_rules or {},
+    })
+    return repository.get_tenant_schema(tenant_id)
+
+
+@_router.delete("/schema/fields/{field_key}", status_code=status.HTTP_204_NO_CONTENT,
+                summary="Remove um campo do schema do tenant")
+def remover_campo(field_key: str, tenant_id: str = Depends(_get_tenant_id)):
+    deleted = repository.delete_field_schema(tenant_id, field_key)
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail=f"Campo '{field_key}' não encontrado.")
 
 
 @_router.delete("/reset", status_code=status.HTTP_204_NO_CONTENT,
