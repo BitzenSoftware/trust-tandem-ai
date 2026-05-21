@@ -17,7 +17,7 @@ from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBea
 from pydantic import BaseModel, Field
 
 import repository
-from app_orquestrador import PainelOrquestracao, _hint
+from app_orquestrador import PainelOrquestracao, _hint, _is_valid_email, _is_valid_cpf
 
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
 
@@ -186,6 +186,31 @@ class WebhookOut(BaseModel):
     active: bool
 
 
+class BulkResolveItem(BaseModel):
+    name: str
+    email: Optional[str] = None
+    cpf: Optional[str] = None
+
+
+class BulkResolveInput(BaseModel):
+    items: list[BulkResolveItem]
+    mode: str = "auto"  # "auto" skips items without a valid suggestion; "all" forces resolve
+
+
+class BulkResolveDetail(BaseModel):
+    name: str
+    status: str  # "success" | "skipped" | "error"
+    detail: Optional[str] = None
+
+
+class BulkResolveReport(BaseModel):
+    approved: int
+    skipped: int
+    errors: int
+    webhooks_fired: int
+    details: list[BulkResolveDetail]
+
+
 # --- ROTAS ---
 
 @_router.post("/ingest", response_model=RespostaIngestao, status_code=status.HTTP_202_ACCEPTED,
@@ -246,6 +271,71 @@ def resolver_registro(cliente: ClienteInput, painel: PainelOrquestracao = Depend
         mensagem=f"Registro '{cliente.name}' reprocessado com dados corrigidos.",
         registros_banco_limpo=len(after_records),
         registros_fila_revisao=len(painel.fila_revisao),
+    )
+
+
+@_router.post("/bulk-resolve", response_model=BulkResolveReport,
+              summary="Resolve em lote registros da fila — único round-trip HTTP, N operações DB")
+def bulk_resolver(payload: BulkResolveInput, painel: PainelOrquestracao = Depends(_get_painel)):
+    queue_index = {r["name"]: r for r in painel.fila_revisao}
+    wh = repository.get_webhook(painel.tenant_id)
+    approved = skipped = errors = webhooks_fired = 0
+    details: list[BulkResolveDetail] = []
+    approved_records: list[dict] = []
+
+    for item in payload.items:
+        original = queue_index.get(item.name)
+        if not original:
+            errors += 1
+            details.append(BulkResolveDetail(name=item.name, status="error", detail="Não encontrado na fila"))
+            continue
+
+        merged = {
+            "name":  item.name,
+            "email": item.email if item.email is not None else original.get("email"),
+            "cpf":   item.cpf   if item.cpf   is not None else original.get("cpf"),
+        }
+
+        has_valid_fix = (item.email is not None and item.email not in ("", "—")) \
+                     or (item.cpf   is not None and item.cpf   not in ("", "—"))
+
+        if not has_valid_fix and payload.mode == "auto":
+            skipped += 1
+            details.append(BulkResolveDetail(name=item.name, status="skipped", detail="sem sugestão automática"))
+            continue
+
+        will_approve = _is_valid_email(merged["email"]) and _is_valid_cpf(merged["cpf"])
+        if not will_approve and payload.mode == "auto":
+            skipped += 1
+            details.append(BulkResolveDetail(name=item.name, status="skipped", detail="dados insuficientes para aprovação"))
+            continue
+
+        painel.remover_da_fila(item.name)
+        painel.processar_registro(merged)
+
+        if will_approve:
+            approved += 1
+            from masking import mask_email, mask_cpf
+            approved_records.append({
+                "name": merged["name"],
+                "email": mask_email(merged["email"]),
+                "cpf":   mask_cpf(merged["cpf"]),
+            })
+            details.append(BulkResolveDetail(
+                name=item.name, status="success",
+                detail=f"email={merged['email']}" if item.email else f"cpf={merged['cpf']}"
+            ))
+        else:
+            errors += 1
+            details.append(BulkResolveDetail(name=item.name, status="error", detail="dados inválidos após merge"))
+
+    if approved_records and wh and wh.get("active"):
+        repository.fire_webhook(wh["url"], wh["secret"], approved_records)
+        webhooks_fired = len(approved_records)
+
+    return BulkResolveReport(
+        approved=approved, skipped=skipped, errors=errors,
+        webhooks_fired=webhooks_fired, details=details,
     )
 
 
