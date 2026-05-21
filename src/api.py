@@ -799,7 +799,7 @@ def sincronizar_stripe():
     try:
         updated = repository.sync_stripe_plans(stripe_key)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Erro ao sincronizar com Stripe: {e}")
+        raise HTTPException(status_code=502, detail=f"Erro ao sincronizar com Stripe: {type(e).__name__}: {e}")
     return {"synced": len(updated), "plans": updated}
 
 
