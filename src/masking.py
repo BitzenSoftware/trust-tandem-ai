@@ -7,10 +7,18 @@ _CPF_PATTERN = re.compile(r"(\d{3})\.(\d{3})\.(\d{3})-(\d{2})")
 _SAFE_FALLBACK = "invalid_data***"
 
 
+def _normalize_cpf(cpf: str) -> str:
+    """Formats 11-digit string into XXX.XXX.XXX-XX before masking."""
+    digits = re.sub(r"\D", "", cpf)
+    if len(digits) == 11:
+        return f"{digits[:3]}.{digits[3:6]}.{digits[6:9]}-{digits[9:]}"
+    return cpf
+
+
 def mask_cpf(cpf: str | None) -> str:
     if not cpf or not isinstance(cpf, str):
         return _SAFE_FALLBACK
-    cpf = cpf.strip()
+    cpf = _normalize_cpf(cpf.strip())
     match = _CPF_PATTERN.fullmatch(cpf)
     if not match:
         logger.warning("mask_cpf: formato inválido recebido — dado omitido")
