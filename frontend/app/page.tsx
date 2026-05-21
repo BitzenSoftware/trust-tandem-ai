@@ -328,7 +328,7 @@ export default function LandingPage() {
                 <span style={{ fontSize: "0.73rem", color: "var(--warning-text)", fontWeight: 600 }}>
                   ⚠️ 3 na Fila de Revisão Humana
                 </span>
-                <span style={{ fontSize: "0.67rem", color: "var(--text-muted)" }}>via Claude AI</span>
+                <span style={{ fontSize: "0.67rem", color: "var(--text-muted)" }}>via Agente IA</span>
               </div>
             </div>
 
@@ -347,7 +347,7 @@ export default function LandingPage() {
                 <BrainIcon size={20} />
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: "0.73rem", fontWeight: 700 }}>Claude diagnosticou:</div>
+                <div style={{ fontSize: "0.73rem", fontWeight: 700 }}>Agente diagnosticou:</div>
                 <div style={{ fontSize: "0.67rem", color: "var(--text-muted)", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
                   email · wanderley#gmail.com → wanderley@gmail.com
                 </div>
@@ -403,7 +403,7 @@ export default function LandingPage() {
                 icon: <UserCheckIcon />,
                 title: "Triagem Humana — HITL",
                 description: "A IA gera diagnóstico estruturado em JSON com campo afetado e sugestão de correção. O operador valida com um clique. Auditoria completa de cada decisão tomada.",
-                tags: ["Human-in-the-Loop", "Claude AI", "JSON Diagnosis"],
+                tags: ["Human-in-the-Loop", "Agente IA", "JSON Diagnosis"],
                 iconColor: "#8B5CF6", iconBg: "rgba(139,92,246,0.1)",
               },
             ].map(f => (
@@ -460,7 +460,7 @@ export default function LandingPage() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 18, marginBottom: 40 }}>
             {[
               { step: "01", icon: "📥", title: "Ingestão & Triagem", color: "var(--accent)", desc: "CSV com milhares de registros é importado. Validação de regras detecta emails malformados e CPFs inválidos automaticamente." },
-              { step: "02", icon: "🧠", title: "Diagnóstico Claude", color: "#8B5CF6", desc: 'O operador clica em "Solicitar Diagnóstico". Claude retorna JSON estruturado com campo afetado e sugestão de correção.' },
+              { step: "02", icon: "🧠", title: "Diagnóstico do Agente", color: "#8B5CF6", desc: 'O operador clica em "Solicitar Diagnóstico". O Agente retorna JSON estruturado com campo afetado e sugestão de correção.' },
               { step: "03", icon: "✅", title: "Validação Humana", color: "var(--success)", desc: "O operador revisa a sugestão, ajusta se necessário, e aprova com um clique — ou expurga o registro conforme Art. 18 LGPD." },
               { step: "04", icon: "🔗", title: "Webhook de Saída", color: "var(--warning)", desc: "O registro limpo é enviado automaticamente via Webhook assíncrono para o CRM/ERP com assinatura HMAC-SHA256." },
             ].map(item => (
@@ -491,7 +491,7 @@ export default function LandingPage() {
               padding: "13px 22px", backgroundColor: "var(--bg-surface-2)",
               borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
             }}>
-              <span style={{ fontSize: "0.8rem", fontWeight: 700 }}>🧠 Diagnóstico Claude — Wanderley Pinto</span>
+              <span style={{ fontSize: "0.8rem", fontWeight: 700 }}>🧠 Diagnóstico do Agente — Wanderley Pinto</span>
               <span style={{
                 fontSize: "0.65rem", padding: "2px 8px",
                 backgroundColor: "var(--warning-subtle)", color: "var(--warning-text)",
@@ -504,7 +504,7 @@ export default function LandingPage() {
               {[
                 { label: "Campo Afetado", value: "email", danger: false, success: false, mono: false },
                 { label: "Valor Original", value: "wanderley#gmail.com", danger: true, success: false, mono: true },
-                { label: "Sugestão Claude", value: "wanderley@gmail.com", danger: false, success: true, mono: true },
+                { label: "Sugestão do Agente", value: "wanderley@gmail.com", danger: false, success: true, mono: true },
                 { label: "Motivo", value: "Caractere '#' inválido no lugar do '@'", danger: false, success: false, mono: false },
               ].map(cell => (
                 <div key={cell.label} style={{ padding: "16px 18px", backgroundColor: "var(--bg-surface)" }}>
@@ -667,7 +667,7 @@ export default function LandingPage() {
                 features: [
                   "Até 1.000 registros/mês",
                   "Upload CSV e formulário manual",
-                  "50 diagnósticos Claude/mês",
+                  "50 diagnósticos do Agente/mês",
                   "1 Webhook de saída",
                   "1 API Key por tenant",
                   "Sem SLA garantido",
@@ -683,7 +683,7 @@ export default function LandingPage() {
                 features: [
                   "Até 50.000 registros/mês",
                   "Chunking automático de CSV",
-                  "Diagnósticos Claude ilimitados",
+                  "Diagnósticos do Agente ilimitados",
                   "Webhooks ilimitados com HMAC-SHA256",
                   "5 API Keys por tenant",
                   "SLA 99,5% de uptime",
@@ -913,7 +913,7 @@ export default function LandingPage() {
             <div style={{ display: "flex", gap: 16 }}>
               <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>🔒 LGPD Compliant</span>
               <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>🇧🇷 Lei 13.709/2018</span>
-              <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>🛡️ Powered by Claude AI</span>
+              <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>🛡️ Powered by Agente IA</span>
             </div>
           </div>
         </div>
