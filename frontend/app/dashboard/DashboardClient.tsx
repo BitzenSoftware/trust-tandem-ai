@@ -109,8 +109,9 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [showNewSecretValue, setShowNewSecretValue] = useState(false);
   const [adminLoaded,   setAdminLoaded]   = useState(false);
   const [editPlan,      setEditPlan]      = useState<Record<string, PlanConfig>>({});
-  const [syncingStripe, setSyncingStripe] = useState(false);
-  const [stripeSyncDone, setStripeSyncDone] = useState(false);
+  const [syncingStripe,   setSyncingStripe]   = useState(false);
+  const [stripeSyncDone,  setStripeSyncDone]  = useState(false);
+  const [stripeSyncError, setStripeSyncError] = useState("");
   const [subscription,  setSubscription]  = useState<SubscriptionInfo | null>(null);
   const [publicPlans,   setPublicPlans]   = useState<PlanConfig[]>([]);
   const [subLoading,    setSubLoading]    = useState(false);
@@ -206,10 +207,6 @@ export default function DashboardClient({ token, userName }: { token: string; us
       setTimeout(() => setSubBanner(null), 6000);
     }
   }, []);
-
-  useEffect(() => {
-    if (tab === "subscription") fetchSubscription();
-  }, [tab, fetchSubscription]);
 
   const fetchSettings = useCallback(async () => {
     const h = await getFreshHeaders();
@@ -377,6 +374,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
   async function handleSyncStripe() {
     setSyncingStripe(true);
     setStripeSyncDone(false);
+    setStripeSyncError("");
     const h = await getFreshHeaders();
     if (!h) { setSyncingStripe(false); return; }
     try {
@@ -392,8 +390,11 @@ export default function DashboardClient({ token, userName }: { token: string; us
         }
         setStripeSyncDone(true);
         setTimeout(() => setStripeSyncDone(false), 3000);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        setStripeSyncError(body.detail || `Erro ${res.status} ao sincronizar com Stripe.`);
       }
-    } catch { /* ignore */ }
+    } catch { setStripeSyncError("Erro de conexão ao tentar sincronizar."); }
     finally { setSyncingStripe(false); }
   }
 
@@ -409,6 +410,10 @@ export default function DashboardClient({ token, userName }: { token: string; us
       if (plansRes.ok) setPublicPlans(await plansRes.json());
     } catch { /* ignore */ }
   }, []);
+
+  useEffect(() => {
+    if (tab === "subscription") fetchSubscription();
+  }, [tab, fetchSubscription]);
 
   async function handleCheckout(plan_name: string) {
     setSubLoading(true);
@@ -1582,6 +1587,11 @@ export default function DashboardClient({ token, userName }: { token: string; us
                     </button>
                   </div>
                   <p style={s.settingsDesc}>{t.admin.plansSubtitle}</p>
+                  {stripeSyncError && (
+                    <div style={{ padding: "10px 14px", backgroundColor: "var(--danger-subtle)", border: "1px solid var(--danger)", borderRadius: 8, fontSize: "0.8rem", color: "var(--danger-text)", marginBottom: 8 }}>
+                      {stripeSyncError}
+                    </div>
+                  )}
                   <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                     {(planConfigs.length > 0 ? planConfigs : [
                       { plan_name: "starter",    field_limit: 5,   price_monthly: 0,   stripe_price_id: null },
