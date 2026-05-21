@@ -5,6 +5,7 @@ import logging
 import os
 import secrets
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests as _http
@@ -23,9 +24,9 @@ _HEADERS = {
 }
 
 if USE_SUPABASE:
-    logger.info("RepositÃ³rio: Supabase ativo (%s)", _SUPABASE_URL)
+    logger.info("Repositório: Supabase ativo (%s)", _SUPABASE_URL)
 else:
-    logger.info("RepositÃ³rio: SQLite local (dev/test)")
+    logger.info("Repositório: SQLite local (dev/test)")
 
 _DB_PATH = Path(__file__).parent.parent / "output" / "trust_tandem.db"
 
@@ -193,6 +194,32 @@ def clear_queue(tenant_id: str = "default") -> None:
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
             conn.execute("DELETE FROM review_queue WHERE tenant_id = ?", (tenant_id,))
+
+
+def purge_expired_queue(tenant_id: str | None = None, days: int = 30) -> int:
+    """LGPD Art. 15 — deletes review_queue records older than `days` days.
+    Pass tenant_id=None to purge across all tenants (super-admin / pg_cron use)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    if USE_SUPABASE:
+        params: dict = {"created_at": f"lt.{cutoff}"}
+        if tenant_id:
+            params["tenant_id"] = f"eq.{tenant_id}"
+        resp = _http.delete(
+            f"{_SUPABASE_URL}/rest/v1/review_queue",
+            params=params,
+            headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
+        )
+        resp.raise_for_status()
+        return len(resp.json())
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            clause = "created_at < ?"
+            args: list = [cutoff]
+            if tenant_id:
+                clause += " AND tenant_id = ?"
+                args.append(tenant_id)
+            return conn.execute(f"DELETE FROM review_queue WHERE {clause}", args).rowcount
+    return 0
 
 
 # --- tenant_api_keys ---
