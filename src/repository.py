@@ -549,22 +549,168 @@ def upsert_field_schema(tenant_id: str, field: dict) -> None:
 
 
 def get_tenant_plan(tenant_id: str) -> str:
-    """Returns the tenant's plan name ('starter', 'pro', 'enterprise'). Defaults to 'starter'."""
+    """Returns the tenant's effective plan name. During trial returns 'pro'; after expiry 'starter'."""
     if tenant_id == "__admin__":
         return "enterprise"
     if USE_SUPABASE:
         try:
             resp = _http.get(
                 f"{_SUPABASE_URL}/rest/v1/tenants",
-                params={"select": "plan", "id": f"eq.{tenant_id}"},
+                params={"select": "plan,subscription_status,trial_ends_at", "id": f"eq.{tenant_id}"},
                 headers=_HEADERS, timeout=10,
             )
             resp.raise_for_status()
             rows = resp.json()
-            return (rows[0].get("plan") or "starter") if rows else "starter"
+            if not rows:
+                return "starter"
+            row = rows[0]
+            status = row.get("subscription_status") or "trialing"
+            plan   = row.get("plan") or "starter"
+            if status == "active":
+                return plan
+            if status == "trialing":
+                trial_ends_at = row.get("trial_ends_at")
+                if trial_ends_at:
+                    trial_dt = datetime.fromisoformat(trial_ends_at.replace("Z", "+00:00"))
+                    if datetime.now(timezone.utc) < trial_dt:
+                        return "pro"
+            return "starter"
         except Exception:
             return "starter"
     return "starter"
+
+
+def ensure_trial_and_upsert(tenant_id: str, company_name: str | None = None) -> None:
+    """Creates tenant row if missing, sets 7-day trial if trial_ends_at not yet set."""
+    if tenant_id == "__admin__" or not USE_SUPABASE:
+        return
+    try:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/tenants",
+            params={"select": "id,trial_ends_at", "id": f"eq.{tenant_id}"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        trial_ends = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        if not rows:
+            payload: dict = {
+                "id": tenant_id, "plan": "starter",
+                "subscription_status": "trialing", "trial_ends_at": trial_ends,
+            }
+            if company_name:
+                payload["company_name"] = company_name
+            _http.post(
+                f"{_SUPABASE_URL}/rest/v1/tenants",
+                json=payload,
+                headers={**_HEADERS, "Prefer": "resolution=ignore-duplicates,return=minimal"},
+                timeout=10,
+            ).raise_for_status()
+        elif not rows[0].get("trial_ends_at"):
+            _http.patch(
+                f"{_SUPABASE_URL}/rest/v1/tenants",
+                params={"id": f"eq.{tenant_id}"},
+                json={"trial_ends_at": trial_ends, "subscription_status": "trialing"},
+                headers=_HEADERS, timeout=10,
+            ).raise_for_status()
+    except Exception as e:
+        logger.warning("ensure_trial_and_upsert failed (non-fatal): %s", e)
+
+
+def get_tenant_subscription(tenant_id: str) -> dict:
+    """Returns full subscription status dict for the subscription tab."""
+    if tenant_id == "__admin__":
+        return {"plan": "enterprise", "effective_plan": "enterprise", "status": "active",
+                "trial_ends_at": None, "trial_days_left": None,
+                "stripe_customer_id": None, "stripe_subscription_id": None}
+    defaults = {"plan": "starter", "effective_plan": "starter", "status": "free",
+                "trial_ends_at": None, "trial_days_left": None,
+                "stripe_customer_id": None, "stripe_subscription_id": None}
+    if not USE_SUPABASE:
+        return defaults
+    try:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/tenants",
+            params={"select": "plan,subscription_status,trial_ends_at,stripe_customer_id,stripe_subscription_id",
+                    "id": f"eq.{tenant_id}"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if not rows:
+            return defaults
+        row = rows[0]
+        plan   = row.get("plan") or "starter"
+        status = row.get("subscription_status") or "trialing"
+        trial_ends_at = row.get("trial_ends_at")
+        trial_days_left: int | None = None
+        effective_plan = plan
+
+        if trial_ends_at:
+            trial_dt = datetime.fromisoformat(trial_ends_at.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            delta = int((trial_dt - now).total_seconds() // 86400)
+            if status == "trialing":
+                if now < trial_dt:
+                    effective_plan = "pro"
+                    trial_days_left = max(0, delta)
+                else:
+                    status = "expired"
+                    effective_plan = "starter"
+
+        if status == "active":
+            effective_plan = plan
+
+        return {
+            "plan": plan, "effective_plan": effective_plan, "status": status,
+            "trial_ends_at": trial_ends_at,
+            "trial_days_left": trial_days_left if status == "trialing" else None,
+            "stripe_customer_id": row.get("stripe_customer_id"),
+            "stripe_subscription_id": row.get("stripe_subscription_id"),
+        }
+    except Exception:
+        return defaults
+
+
+def update_tenant_subscription(
+    tenant_id: str, plan: str, status: str,
+    stripe_customer_id: str | None = None,
+    stripe_subscription_id: str | None = None,
+) -> None:
+    """Updates tenant subscription after Stripe event."""
+    if not USE_SUPABASE:
+        return
+    payload: dict = {"plan": plan, "subscription_status": status}
+    if stripe_customer_id:
+        payload["stripe_customer_id"] = stripe_customer_id
+    if stripe_subscription_id:
+        payload["stripe_subscription_id"] = stripe_subscription_id
+    try:
+        _http.patch(
+            f"{_SUPABASE_URL}/rest/v1/tenants",
+            params={"id": f"eq.{tenant_id}"},
+            json=payload,
+            headers=_HEADERS, timeout=10,
+        ).raise_for_status()
+    except Exception as e:
+        logger.warning("update_tenant_subscription failed: %s", e)
+
+
+def get_tenant_by_stripe_customer(stripe_customer_id: str) -> str | None:
+    """Finds tenant_id by Stripe customer ID for webhook resolution."""
+    if not USE_SUPABASE:
+        return None
+    try:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/tenants",
+            params={"select": "id", "stripe_customer_id": f"eq.{stripe_customer_id}"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0]["id"] if rows else None
+    except Exception:
+        return None
 
 
 _DEFAULT_KEYS = {f["field_key"] for f in _DEFAULT_SCHEMA}
