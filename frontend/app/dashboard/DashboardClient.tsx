@@ -12,6 +12,8 @@ type CleanRecord    = { name: string; email: string; cpf: string };
 type QueueItem      = { name: string; email_hint: string; cpf_hint: string };
 type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown> };
 type PlanInfo       = { plan: string; field_limit: number; field_count: number };
+type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null };
+type SecretEntry   = { key_name: string; updated_at: string };
 type DiagnosisResult = {
   campo_afetado: string;
   valor_original: string;
@@ -64,7 +66,7 @@ function MoonIcon() {
 export default function DashboardClient({ token, userName }: { token: string; userName: string }) {
   const router = useRouter();
   const { t } = useTranslation();
-  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "schema" | "audit">("dashboard");
+  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "schema" | "audit" | "admin">("dashboard");
   const [db,        setDb]        = useState<CleanRecord[]>([]);
   const [queue,     setQueue]     = useState<QueueItem[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -88,6 +90,18 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [schemaLoading, setSchemaLoading] = useState(false);
   const [planInfo,      setPlanInfo]      = useState<PlanInfo | null>(null);
   const [addFieldError, setAddFieldError] = useState("");
+  const [isSuperAdmin,  setIsSuperAdmin]  = useState(false);
+  const [adminTab,      setAdminTab]      = useState<"plans" | "keys">("plans");
+  const [planConfigs,   setPlanConfigs]   = useState<PlanConfig[]>([]);
+  const [planSaving,    setPlanSaving]    = useState<Record<string, boolean>>({});
+  const [planSaved,     setPlanSaved]     = useState<Record<string, boolean>>({});
+  const [secrets,       setSecrets]       = useState<SecretEntry[]>([]);
+  const [revealedKeys,  setRevealedKeys]  = useState<Record<string, string>>({});
+  const [copiedSecret,  setCopiedSecret]  = useState<Record<string, boolean>>({});
+  const [newSecret,     setNewSecret]     = useState({ key_name: "", value: "" });
+  const [secretSaving,  setSecretSaving]  = useState(false);
+  const [adminLoaded,   setAdminLoaded]   = useState(false);
+  const [editPlan,      setEditPlan]      = useState<Record<string, PlanConfig>>({});
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [csvMapStep,    setCsvMapStep]    = useState<"upload" | "map" | "ready">("upload");
   const [apiKeys,       setApiKeys]       = useState<{ id: number; label: string | null; created_at: string }[]>([]);
@@ -133,6 +147,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
     setLoading(true); setError("");
     const h = await getFreshHeaders();
     if (!h) { router.push("/login"); return; }
+    // Check super admin status
+    const profileRes = await apiFetch(`${API}/admin/profile`, { headers: h });
+    if (profileRes.ok) {
+      const prof = await profileRes.json();
+      setIsSuperAdmin(prof.is_super_admin);
+    }
     // Warm up Render (free tier sleeps; this health ping waits up to 55s)
     const wc = new AbortController();
     const wt = setTimeout(() => wc.abort(), 55000);
@@ -225,6 +245,90 @@ export default function DashboardClient({ token, userName }: { token: string; us
     if (!h) return;
     await apiFetch(`${API}/schema/fields/${encodeURIComponent(field_key)}`, { method: "DELETE", headers: h });
     fetchSchema();
+  }
+
+  const fetchAdminData = useCallback(async () => {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    const [plansRes, secretsRes] = await Promise.all([
+      apiFetch(`${API}/admin/plans`,   { headers: h }),
+      apiFetch(`${API}/admin/secrets`, { headers: h }),
+    ]);
+    if (plansRes.ok) {
+      const configs: PlanConfig[] = await plansRes.json();
+      setPlanConfigs(configs);
+      const map: Record<string, PlanConfig> = {};
+      configs.forEach(c => { map[c.plan_name] = { ...c }; });
+      setEditPlan(map);
+    }
+    if (secretsRes.ok) setSecrets(await secretsRes.json());
+    setAdminLoaded(true);
+  }, []);
+
+  async function handleSavePlan(plan_name: string) {
+    const cfg = editPlan[plan_name];
+    if (!cfg) return;
+    setPlanSaving(p => ({ ...p, [plan_name]: true }));
+    const h = await getFreshHeaders();
+    if (!h) { setPlanSaving(p => ({ ...p, [plan_name]: false })); return; }
+    const res = await apiFetch(`${API}/admin/plans/${plan_name}`, {
+      method: "PUT", headers: h,
+      body: JSON.stringify({ field_limit: cfg.field_limit, price_monthly: cfg.price_monthly, stripe_price_id: cfg.stripe_price_id }),
+    });
+    if (res.ok) {
+      const updated: PlanConfig[] = await res.json();
+      setPlanConfigs(updated);
+      setPlanSaved(p => ({ ...p, [plan_name]: true }));
+      setTimeout(() => setPlanSaved(p => ({ ...p, [plan_name]: false })), 2000);
+    }
+    setPlanSaving(p => ({ ...p, [plan_name]: false }));
+  }
+
+  async function handleRevealSecret(key_name: string) {
+    if (revealedKeys[key_name] !== undefined) {
+      setRevealedKeys(p => { const n = { ...p }; delete n[key_name]; return n; });
+      return;
+    }
+    const h = await getFreshHeaders();
+    if (!h) return;
+    const res = await apiFetch(`${API}/admin/secrets/${encodeURIComponent(key_name)}/reveal`, { headers: h });
+    if (res.ok) {
+      const data = await res.json();
+      setRevealedKeys(p => ({ ...p, [key_name]: data.value }));
+    }
+  }
+
+  async function handleCopySecret(key_name: string) {
+    const val = revealedKeys[key_name];
+    if (!val) return;
+    await navigator.clipboard.writeText(val);
+    setCopiedSecret(p => ({ ...p, [key_name]: true }));
+    setTimeout(() => setCopiedSecret(p => ({ ...p, [key_name]: false })), 2000);
+  }
+
+  async function handleSaveSecret() {
+    if (!newSecret.key_name || !newSecret.value) return;
+    setSecretSaving(true);
+    const h = await getFreshHeaders();
+    if (!h) { setSecretSaving(false); return; }
+    const res = await apiFetch(`${API}/admin/secrets`, {
+      method: "POST", headers: h,
+      body: JSON.stringify(newSecret),
+    });
+    if (res.ok) {
+      setNewSecret({ key_name: "", value: "" });
+      await fetchAdminData();
+    }
+    setSecretSaving(false);
+  }
+
+  async function handleDeleteSecret(key_name: string) {
+    if (!confirm(t.admin.confirmDelete)) return;
+    const h = await getFreshHeaders();
+    if (!h) return;
+    await apiFetch(`${API}/admin/secrets/${encodeURIComponent(key_name)}`, { method: "DELETE", headers: h });
+    setRevealedKeys(p => { const n = { ...p }; delete n[key_name]; return n; });
+    await fetchAdminData();
   }
 
   function autoMapColumns(columns: string[], currentSchema: FieldSchema[]): Record<string, string> {
@@ -678,6 +782,11 @@ export default function DashboardClient({ token, userName }: { token: string; us
             <button onClick={() => setTab("audit")} style={tab === "audit" ? s.tabActive : s.tabInactive}>
               {t.audit.tab}
             </button>
+            {isSuperAdmin && (
+              <button onClick={() => { setTab("admin" as never); if (!adminLoaded) fetchAdminData(); }} style={(tab as string) === "admin" ? s.tabActive : s.tabInactive}>
+                {t.admin.tab}
+              </button>
+            )}
         </div>
       </div>
 
@@ -1224,6 +1333,138 @@ export default function DashboardClient({ token, userName }: { token: string; us
                 <span style={s.auditBadgePurple}>{t.audit.cryptoBadge3}</span>
               </div>
             </div>
+          </div>
+        ) : tab === "admin" ? (
+          /* ── SUPER ADMIN ── */
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Sub-tab switcher */}
+            <div style={{ display: "flex", gap: 8, borderBottom: "1px solid var(--border)", paddingBottom: 0 }}>
+              <button onClick={() => setAdminTab("plans")} style={adminTab === "plans" ? s.tabActive : s.tabInactive}>{t.admin.plansTab}</button>
+              <button onClick={() => setAdminTab("keys")}  style={adminTab === "keys"  ? s.tabActive : s.tabInactive}>{t.admin.keysTab}</button>
+            </div>
+
+            {adminTab === "plans" ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <div style={s.settingsCard}>
+                  <p style={s.settingsTitle}>{t.admin.plansTitle}</p>
+                  <p style={s.settingsDesc}>{t.admin.plansSubtitle}</p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                    {(planConfigs.length > 0 ? planConfigs : [
+                      { plan_name: "starter",    field_limit: 5,   price_monthly: 0,   stripe_price_id: null },
+                      { plan_name: "pro",        field_limit: 15,  price_monthly: 49,  stripe_price_id: null },
+                      { plan_name: "enterprise", field_limit: 999, price_monthly: 199, stripe_price_id: null },
+                    ]).map(cfg => {
+                      const edit = editPlan[cfg.plan_name] || cfg;
+                      return (
+                        <div key={cfg.plan_name} style={{ backgroundColor: "var(--bg-surface-2)", borderRadius: 12, border: "1px solid var(--border)", padding: "18px 20px" }}>
+                          <p style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 14, textTransform: "capitalize" as const }}>{cfg.plan_name}</p>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>
+                            <div>
+                              <label style={s.ingestLabel}>{t.admin.fieldLimit}</label>
+                              <input type="number" min={1} style={s.ingestInput} value={edit.field_limit}
+                                onChange={e => setEditPlan(p => ({ ...p, [cfg.plan_name]: { ...edit, field_limit: Number(e.target.value) } }))} />
+                            </div>
+                            <div>
+                              <label style={s.ingestLabel}>{t.admin.priceMonthly}</label>
+                              <input type="number" min={0} step={0.01} style={s.ingestInput} value={edit.price_monthly}
+                                onChange={e => setEditPlan(p => ({ ...p, [cfg.plan_name]: { ...edit, price_monthly: Number(e.target.value) } }))} />
+                            </div>
+                            <div>
+                              <label style={s.ingestLabel}>{t.admin.stripePriceId}</label>
+                              <input type="text" placeholder="price_xxx" style={s.ingestInput} value={edit.stripe_price_id || ""}
+                                onChange={e => setEditPlan(p => ({ ...p, [cfg.plan_name]: { ...edit, stripe_price_id: e.target.value || null } }))} />
+                            </div>
+                            <button onClick={() => handleSavePlan(cfg.plan_name)}
+                              disabled={planSaving[cfg.plan_name]}
+                              style={{ ...s.ingestBtn, opacity: planSaving[cfg.plan_name] ? 0.6 : 1, whiteSpace: "nowrap" as const }}>
+                              {planSaved[cfg.plan_name] ? t.admin.saved : planSaving[cfg.plan_name] ? t.admin.saving : t.admin.save}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Keys tab */
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <div style={s.settingsCard}>
+                  <p style={s.settingsTitle}>{t.admin.keysTitle}</p>
+                  <p style={s.settingsDesc}>{t.admin.keysSubtitle}</p>
+
+                  {/* Stored secrets list */}
+                  {secrets.length === 0 ? (
+                    <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: 16 }}>{t.admin.noKeys}</p>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+                      {secrets.map(s2 => {
+                        const revealed = revealedKeys[s2.key_name];
+                        const isRevealed = revealed !== undefined;
+                        return (
+                          <div key={s2.key_name} style={{ display: "flex", flexDirection: "column", gap: 4, padding: "12px 14px", backgroundColor: "var(--bg-surface-2)", borderRadius: 10, border: "1px solid var(--border)" }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                              <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)", fontFamily: "var(--font-geist-mono)" }}>{s2.key_name}</span>
+                              <div style={{ display: "flex", gap: 8 }}>
+                                <button onClick={() => handleRevealSecret(s2.key_name)} style={s.diagnoseBtn}>
+                                  {isRevealed ? t.admin.hide : t.admin.reveal}
+                                </button>
+                                {isRevealed && (
+                                  <button onClick={() => handleCopySecret(s2.key_name)} style={s.copyBtn}>
+                                    {copiedSecret[s2.key_name] ? t.admin.copied : t.admin.copy}
+                                  </button>
+                                )}
+                                <button onClick={() => handleDeleteSecret(s2.key_name)} style={s.revokeBtn}>{t.admin.deleteKey}</button>
+                              </div>
+                            </div>
+                            {isRevealed && (
+                              <div style={{ fontFamily: "var(--font-geist-mono)", fontSize: "0.78rem", color: "var(--text-secondary)", backgroundColor: "var(--bg-surface)", borderRadius: 6, padding: "6px 10px", border: "1px solid var(--border)", wordBreak: "break-all" as const }}>
+                                {revealed}
+                              </div>
+                            )}
+                            <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>{t.admin.updatedAt}: {new Date(s2.updated_at).toLocaleString()}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Add new secret */}
+                  <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 10 }}>{t.admin.addKey}</p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
+                      <div>
+                        <label style={s.ingestLabel}>{t.admin.keyName}</label>
+                        <input type="text" placeholder="ANTHROPIC_API_KEY" style={s.ingestInput}
+                          value={newSecret.key_name}
+                          onChange={e => setNewSecret(p => ({ ...p, key_name: e.target.value.toUpperCase().replace(/\s+/g, "_") }))} />
+                      </div>
+                      <div>
+                        <label style={s.ingestLabel}>{t.admin.keyValue}</label>
+                        <input type="password" placeholder="sk-..." style={s.ingestInput}
+                          value={newSecret.value}
+                          onChange={e => setNewSecret(p => ({ ...p, value: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div>
+                      <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: 6 }}>{t.admin.suggestedKeys}:</p>
+                      <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 6 }}>
+                        {["ANTHROPIC_API_KEY","SUPABASE_URL","SUPABASE_ANON_KEY","SUPABASE_SERVICE_KEY","STRIPE_SECRET_KEY","STRIPE_PUBLISHABLE_KEY","STRIPE_WEBHOOK_SECRET"].map(k => (
+                          <button key={k} onClick={() => setNewSecret(p => ({ ...p, key_name: k }))}
+                            style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: 6, border: "1px solid var(--border)", backgroundColor: newSecret.key_name === k ? "var(--accent)" : "var(--bg-surface)", color: newSecret.key_name === k ? "#fff" : "var(--text-muted)", cursor: "pointer" }}>
+                            {k}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <button onClick={handleSaveSecret} disabled={secretSaving || !newSecret.key_name || !newSecret.value}
+                      style={{ ...s.ingestBtn, opacity: secretSaving || !newSecret.key_name || !newSecret.value ? 0.6 : 1 }}>
+                      {secretSaving ? t.admin.saving : t.admin.addKey}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           /* ── SETTINGS ── */
