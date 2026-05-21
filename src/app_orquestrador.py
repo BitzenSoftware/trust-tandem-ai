@@ -24,6 +24,50 @@ def _is_valid_cpf(value) -> bool:
     return len(re.sub(r"\D", "", value)) == 11
 
 
+def _validate_by_type(value: str | None, field_type: str, rules: dict | None = None) -> bool:
+    """Returns True when value passes validation for the given field_type."""
+    if value is None or not isinstance(value, str):
+        return False
+    v = value.strip()
+    if not v:
+        return False
+    rules = rules or {}
+
+    if field_type == "email":
+        parts = v.split("@")
+        return len(parts) == 2 and len(parts[0]) >= 2 and "." in parts[1]
+
+    if field_type == "cpf":
+        return len(re.sub(r"\D", "", v)) == 11
+
+    if field_type == "document":
+        digits = len(re.sub(r"\D", "", v))
+        return digits in (11, 14)
+
+    if field_type == "number":
+        try:
+            num = float(v.replace(",", "."))
+            if "min" in rules and num < rules["min"]:
+                return False
+            if "max" in rules and num > rules["max"]:
+                return False
+            return True
+        except ValueError:
+            return False
+
+    if field_type == "phone":
+        return len(re.sub(r"\D", "", v)) in (10, 11)
+
+    if field_type == "cep":
+        return len(re.sub(r"\D", "", v)) == 8
+
+    if field_type == "date":
+        return bool(re.match(r"\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}", v))
+
+    # text / unknown
+    return len(v) >= int(rules.get("min_length", 2))
+
+
 def _hint(value: str, chars: int = 3) -> str:
     if not value or value.lower() == "none":
         return "[vazio]"
@@ -43,16 +87,29 @@ class PainelOrquestracao:
     def fila_revisao(self) -> list[dict]:
         return repository.get_queue(self.tenant_id)
 
-    def processar_registro(self, cliente: dict) -> None:
-        email = cliente.get("email")
-        cpf = cliente.get("cpf")
+    def processar_registro(self, cliente: dict, schema: list[dict] | None = None) -> None:
+        if schema is None:
+            schema = repository.get_tenant_schema(self.tenant_id)
 
-        if _is_valid_email(email) and _is_valid_cpf(cpf):
-            repository.save({
-                "name": cliente["name"],
-                "email": mask_email(email),
-                "cpf": mask_cpf(cpf),
-            }, self.tenant_id)
+        # name is always required
+        if not cliente.get("name") or not str(cliente["name"]).strip():
+            repository.save_to_queue(cliente, self.tenant_id)
+            logger.warning("Registro sem nome válido enviado para Fila de Revisão Humana.")
+            return
+
+        # Validate all required schema fields
+        all_valid = all(
+            _validate_by_type(
+                cliente.get(f["field_key"]),
+                f["field_type"],
+                f.get("validation_rules") or {},
+            )
+            for f in schema
+            if f.get("required", True)
+        )
+
+        if all_valid:
+            self.resolver_direto(cliente)
         else:
             repository.save_to_queue(cliente, self.tenant_id)
             logger.warning("Registro de '%s' enviado para Fila de Revisão Humana.", cliente["name"])
@@ -61,13 +118,12 @@ class PainelOrquestracao:
         return repository.remove_from_queue(name, self.tenant_id)
 
     def resolver_direto(self, merged: dict) -> None:
-        """Saves directly to clean records with masking — bypasses re-queue logic.
-        Use this for human/AI approvals where we trust the corrections."""
-        from masking import mask_email, mask_cpf
+        """Saves directly to clean records with masking — bypasses re-queue logic."""
         repository.save({
             "name":  merged["name"],
             "email": mask_email(merged.get("email") or ""),
             "cpf":   mask_cpf(merged.get("cpf") or ""),
+            **{k: v for k, v in merged.items() if k not in ("name", "email", "cpf")},
         }, self.tenant_id)
 
     def limpar_tudo(self) -> None:
