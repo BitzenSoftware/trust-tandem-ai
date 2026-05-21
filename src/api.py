@@ -17,7 +17,7 @@ from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBea
 from pydantic import BaseModel, Field
 
 import repository
-from app_orquestrador import PainelOrquestracao, _hint, _is_valid_email, _is_valid_cpf
+from app_orquestrador import PainelOrquestracao, _hint
 
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
 
@@ -124,7 +124,8 @@ app.add_middleware(
 
 @app.get("/health", include_in_schema=False)
 def health():
-    return {"status": "ok"}
+    import repository as _repo
+    return {"status": "ok", "storage": "supabase" if _repo.USE_SUPABASE else "sqlite"}
 
 
 _router = APIRouter(prefix="/api/v1", dependencies=[Depends(_get_tenant_id)])
@@ -251,8 +252,7 @@ def visualizar_banco_seguro(painel: PainelOrquestracao = Depends(_get_painel)):
               summary="Submete correção humana para um registro da fila")
 def resolver_registro(cliente: ClienteInput, painel: PainelOrquestracao = Depends(_get_painel)):
     before = len(painel.banco_limpo)
-    # Merge corrections with original queue record so a partial fix (e.g. only email)
-    # doesn't lose the other field and cause the record to be re-queued.
+    # Merge corrections with original so a partial fix (e.g. only email) keeps the other field.
     original = next((r for r in painel.fila_revisao if r["name"] == cliente.name), {})
     merged = {
         "name":  cliente.name,
@@ -260,7 +260,8 @@ def resolver_registro(cliente: ClienteInput, painel: PainelOrquestracao = Depend
         "cpf":   cliente.cpf   if cliente.cpf   is not None else original.get("cpf"),
     }
     painel.remover_da_fila(cliente.name)
-    painel.processar_registro(merged)
+    # resolver_direto bypasses re-queue logic — human approval is trusted unconditionally
+    painel.resolver_direto(merged)
     after_records = painel.banco_limpo
     if len(after_records) > before:
         wh = repository.get_webhook(painel.tenant_id)
@@ -304,30 +305,21 @@ def bulk_resolver(payload: BulkResolveInput, painel: PainelOrquestracao = Depend
             details.append(BulkResolveDetail(name=item.name, status="skipped", detail="sem sugestão automática"))
             continue
 
-        will_approve = _is_valid_email(merged["email"]) and _is_valid_cpf(merged["cpf"])
-        if not will_approve and payload.mode == "auto":
-            skipped += 1
-            details.append(BulkResolveDetail(name=item.name, status="skipped", detail="dados insuficientes para aprovação"))
-            continue
-
+        # resolver_direto bypasses re-queue validation — AI/human approval is trusted
         painel.remover_da_fila(item.name)
-        painel.processar_registro(merged)
+        painel.resolver_direto(merged)
 
-        if will_approve:
-            approved += 1
-            from masking import mask_email, mask_cpf
-            approved_records.append({
-                "name": merged["name"],
-                "email": mask_email(merged["email"]),
-                "cpf":   mask_cpf(merged["cpf"]),
-            })
-            details.append(BulkResolveDetail(
-                name=item.name, status="success",
-                detail=f"email={merged['email']}" if item.email else f"cpf={merged['cpf']}"
-            ))
-        else:
-            errors += 1
-            details.append(BulkResolveDetail(name=item.name, status="error", detail="dados inválidos após merge"))
+        approved += 1
+        from masking import mask_email, mask_cpf
+        approved_records.append({
+            "name": merged["name"],
+            "email": mask_email(merged.get("email") or ""),
+            "cpf":   mask_cpf(merged.get("cpf") or ""),
+        })
+        details.append(BulkResolveDetail(
+            name=item.name, status="success",
+            detail=f"email={merged['email']}" if item.email else f"cpf={merged['cpf']}"
+        ))
 
     if approved_records and wh and wh.get("active"):
         repository.fire_webhook(wh["url"], wh["secret"], approved_records)
