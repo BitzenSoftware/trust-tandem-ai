@@ -226,8 +226,16 @@ def visualizar_banco_seguro(painel: PainelOrquestracao = Depends(_get_painel)):
               summary="Submete correção humana para um registro da fila")
 def resolver_registro(cliente: ClienteInput, painel: PainelOrquestracao = Depends(_get_painel)):
     before = len(painel.banco_limpo)
+    # Merge corrections with original queue record so a partial fix (e.g. only email)
+    # doesn't lose the other field and cause the record to be re-queued.
+    original = next((r for r in painel.fila_revisao if r["name"] == cliente.name), {})
+    merged = {
+        "name":  cliente.name,
+        "email": cliente.email if cliente.email is not None else original.get("email"),
+        "cpf":   cliente.cpf   if cliente.cpf   is not None else original.get("cpf"),
+    }
     painel.remover_da_fila(cliente.name)
-    painel.processar_registro(cliente.model_dump())
+    painel.processar_registro(merged)
     after_records = painel.banco_limpo
     if len(after_records) > before:
         wh = repository.get_webhook(painel.tenant_id)
