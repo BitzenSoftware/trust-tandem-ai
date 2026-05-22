@@ -501,6 +501,20 @@ export default function DashboardClient({ token, userName }: { token: string; us
     fetchEnterpriseClients();
   }
 
+  async function handleExportCSV() {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    const res = await apiFetch(`${API}/database/export`, { headers: h });
+    if (!res || !res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `trust-tandem-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function autoMapColumns(columns: string[], currentSchema: FieldSchema[]): Record<string, string> {
     const mapping: Record<string, string> = {};
     for (const col of columns) {
@@ -1048,8 +1062,16 @@ export default function DashboardClient({ token, userName }: { token: string; us
 
             {/* Tabela */}
             <div style={{ ...s.card, padding: 0, overflow: "hidden" }}>
-              <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)" }}>
-                <p style={s.sectionTitle}>{t.dashboard.tableTitle}</p>
+              <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <p style={{ ...s.sectionTitle, margin: 0 }}>{t.dashboard.tableTitle}</p>
+                {db.length > 0 && (
+                  <button
+                    onClick={handleExportCSV}
+                    style={{ padding: "6px 14px", fontSize: "0.8rem", fontWeight: 600, color: "var(--accent)", background: "none", border: "1px solid var(--accent)", borderRadius: 8, cursor: "pointer" }}
+                  >
+                    ↓ {t.dashboard.exportCsv}
+                  </button>
+                )}
               </div>
               {db.length === 0 ? (
                 <p style={{ padding: "32px 20px", color: "var(--text-muted)", fontSize: "0.85rem", textAlign: "center" }}>
