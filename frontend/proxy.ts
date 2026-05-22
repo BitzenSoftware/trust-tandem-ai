@@ -22,14 +22,19 @@ export async function proxy(request: NextRequest) {
   );
 
   const { data: { user } } = await supabase.auth.getUser();
-
   const { pathname } = request.nextUrl;
-  const isAuth = pathname.startsWith("/login") || pathname.startsWith("/register");
 
-  if (!user && !isAuth) {
+  const isPublic = pathname === "/"
+    || pathname.startsWith("/login")
+    || pathname.startsWith("/register");
+
+  // Unauthenticated user trying to access a protected route → login
+  if (!user && !isPublic) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
-  if (user && isAuth) {
+
+  // Authenticated user on login/register → go to dashboard
+  if (user && (pathname.startsWith("/login") || pathname.startsWith("/register"))) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
