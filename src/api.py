@@ -15,7 +15,7 @@ import anthropic
 import requests as _req
 from typing import Optional
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Security, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
@@ -376,10 +376,17 @@ def listar_fila_revisao(painel: PainelOrquestracao = Depends(_get_painel)):
     ]
 
 
-@_router.get("/database", response_model=list[RegistroMascaradoOut],
-             summary="Retorna dados mascarados aprovados para persistência")
-def visualizar_banco_seguro(painel: PainelOrquestracao = Depends(_get_painel)):
-    return painel.banco_limpo
+@_router.get("/database", summary="Retorna dados mascarados aprovados — cursor-based pagination")
+def visualizar_banco_seguro(
+    painel: PainelOrquestracao = Depends(_get_painel),
+    limit: int = Query(default=500, ge=1, le=1000, description="Registros por página (máx 1000)"),
+    after_id: Optional[int] = Query(default=None, description="Cursor: ID do último registo recebido"),
+):
+    records, next_cursor = repository.get_clean_records_paginated(painel.tenant_id, after_id, limit)
+    headers: dict[str, str] = {"X-Has-More": "true" if next_cursor is not None else "false"}
+    if next_cursor is not None:
+        headers["X-Next-Cursor"] = str(next_cursor)
+    return JSONResponse(content=records, headers=headers)
 
 
 @_router.post("/resolve", response_model=RespostaIngestao,
