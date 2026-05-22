@@ -899,6 +899,24 @@ def delete_secret(key_name: str) -> int:
     return 0
 
 
+def list_tenants() -> list[dict]:
+    """Lists all registered tenants with company name (admin view)."""
+    if not USE_SUPABASE:
+        return []
+    try:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/tenants",
+            params={"select": "tenant_id,company_name,plan,subscription_status",
+                    "order": "company_name.asc.nullslast"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.warning("list_tenants failed: %s", e)
+        return []
+
+
 # --- enterprise_client_configs ---
 
 def get_enterprise_config(tenant_id: str) -> dict | None:
