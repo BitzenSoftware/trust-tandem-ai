@@ -145,6 +145,56 @@ def all_records(tenant_id: str = "default") -> list[dict]:
         ).fetchall()]
 
 
+def get_clean_records_paginated(
+    tenant_id: str, after_id: int | None = None, limit: int = 500
+) -> tuple[list[dict], int | None]:
+    """Cursor-based pagination for clean_records.
+    Returns (records, next_cursor_id). next_cursor_id is None when no further pages exist."""
+    limit = min(max(limit, 1), 1000)
+    fetch = limit + 1  # fetch one extra to detect next page
+
+    if USE_SUPABASE:
+        params: dict = {
+            "select": "id,name,email,cpf",
+            "order": "id.asc",
+            "tenant_id": f"eq.{tenant_id}",
+            "limit": fetch,
+        }
+        if after_id is not None:
+            params["id"] = f"gt.{after_id}"
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/clean_records",
+            params=params, headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        next_cursor = page[-1]["id"] if has_more and page else None
+        return [{"name": r["name"], "email": r["email"], "cpf": r["cpf"]} for r in page], next_cursor
+
+    # SQLite fallback
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        if after_id is not None:
+            rows = conn.execute(
+                "SELECT id, name, email, cpf FROM clean_records "
+                "WHERE tenant_id = ? AND id > ? ORDER BY id LIMIT ?",
+                (tenant_id, after_id, fetch),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name, email, cpf FROM clean_records "
+                "WHERE tenant_id = ? ORDER BY id LIMIT ?",
+                (tenant_id, fetch),
+            ).fetchall()
+        rows = [dict(r) for r in rows]
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        next_cursor = page[-1]["id"] if has_more and page else None
+        return [{"name": r["name"], "email": r["email"], "cpf": r["cpf"]} for r in page], next_cursor
+
+
 def clear(tenant_id: str = "default") -> None:
     if USE_SUPABASE:
         resp = _http.delete(
