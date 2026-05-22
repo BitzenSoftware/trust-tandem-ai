@@ -821,6 +821,13 @@ def sincronizar_stripe():
     return {"synced": len(updated), "plans": updated}
 
 
+@_router.get("/admin/tenants",
+             summary="Lista todos os tenants registados [super admin]",
+             dependencies=[Depends(_require_super_admin)])
+def listar_tenants():
+    return repository.list_tenants()
+
+
 @_router.get("/admin/enterprise/clients",
              summary="Lista configs de clientes Enterprise [super admin]",
              dependencies=[Depends(_require_super_admin)])
