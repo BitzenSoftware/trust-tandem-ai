@@ -109,9 +109,11 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [showNewSecretValue, setShowNewSecretValue] = useState(false);
   const [adminLoaded,   setAdminLoaded]   = useState(false);
   const [editPlan,      setEditPlan]      = useState<Record<string, PlanConfig>>({});
-  const [syncingStripe,   setSyncingStripe]   = useState(false);
-  const [stripeSyncDone,  setStripeSyncDone]  = useState(false);
-  const [stripeSyncError, setStripeSyncError] = useState("");
+  const [syncingStripe,    setSyncingStripe]    = useState(false);
+  const [stripeSyncDone,   setStripeSyncDone]   = useState(false);
+  const [stripeSyncError,  setStripeSyncError]  = useState("");
+  const [revealedPriceIds, setRevealedPriceIds] = useState<Record<string, boolean>>({});
+  const [copiedPriceId,    setCopiedPriceId]    = useState<Record<string, boolean>>({});
   const [subscription,  setSubscription]  = useState<SubscriptionInfo | null>(null);
   const [publicPlans,   setPublicPlans]   = useState<PlanConfig[]>([]);
   const [subLoading,    setSubLoading]    = useState(false);
@@ -1615,8 +1617,22 @@ export default function DashboardClient({ token, userName }: { token: string; us
                             </div>
                             <div>
                               <label style={s.ingestLabel}>{t.admin.stripePriceId}</label>
-                              <input type="text" placeholder="price_xxx" style={s.ingestInput} value={edit.stripe_price_id || ""}
-                                onChange={e => setEditPlan(p => ({ ...p, [cfg.plan_name]: { ...edit, stripe_price_id: e.target.value || null } }))} />
+                              {edit.stripe_price_id ? (
+                                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                  <span style={{ ...s.ingestInput, display: "flex", alignItems: "center", fontFamily: "var(--font-geist-mono)", fontSize: "0.78rem", letterSpacing: revealedPriceIds[cfg.plan_name] ? "normal" : "0.12em", color: "var(--text-secondary)", userSelect: revealedPriceIds[cfg.plan_name] ? "text" as const : "none" as const, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
+                                    {revealedPriceIds[cfg.plan_name] ? edit.stripe_price_id : "••••••••••••••••"}
+                                  </span>
+                                  <button onClick={() => setRevealedPriceIds(p => ({ ...p, [cfg.plan_name]: !p[cfg.plan_name] }))} style={s.diagnoseBtn}>
+                                    {revealedPriceIds[cfg.plan_name] ? t.admin.hide : t.admin.reveal}
+                                  </button>
+                                  <button onClick={() => { navigator.clipboard.writeText(edit.stripe_price_id!); setCopiedPriceId(p => ({ ...p, [cfg.plan_name]: true })); setTimeout(() => setCopiedPriceId(p => ({ ...p, [cfg.plan_name]: false })), 2000); }} style={s.copyBtn}>
+                                    {copiedPriceId[cfg.plan_name] ? t.admin.copied : t.admin.copy}
+                                  </button>
+                                </div>
+                              ) : (
+                                <input type="text" placeholder="price_xxx" style={s.ingestInput} value={edit.stripe_price_id || ""}
+                                  onChange={e => setEditPlan(p => ({ ...p, [cfg.plan_name]: { ...edit, stripe_price_id: e.target.value || null } }))} />
+                              )}
                             </div>
                             <button onClick={() => handleSavePlan(cfg.plan_name)}
                               disabled={planSaving[cfg.plan_name]}
