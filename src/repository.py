@@ -622,10 +622,12 @@ def get_tenant_subscription(tenant_id: str) -> dict:
     if tenant_id == "__admin__":
         return {"plan": "enterprise", "effective_plan": "enterprise", "status": "active",
                 "trial_ends_at": None, "trial_days_left": None,
-                "stripe_customer_id": None, "stripe_subscription_id": None}
+                "stripe_customer_id": None, "stripe_subscription_id": None,
+                "enterprise_config": None}
     defaults = {"plan": "starter", "effective_plan": "starter", "status": "free",
                 "trial_ends_at": None, "trial_days_left": None,
-                "stripe_customer_id": None, "stripe_subscription_id": None}
+                "stripe_customer_id": None, "stripe_subscription_id": None,
+                "enterprise_config": None}
     if not USE_SUPABASE:
         return defaults
     try:
@@ -661,12 +663,14 @@ def get_tenant_subscription(tenant_id: str) -> dict:
         if status == "active":
             effective_plan = plan
 
+        enterprise_config = get_enterprise_config(tenant_id)
         return {
             "plan": plan, "effective_plan": effective_plan, "status": status,
             "trial_ends_at": trial_ends_at,
             "trial_days_left": trial_days_left if status == "trialing" else None,
             "stripe_customer_id": row.get("stripe_customer_id"),
             "stripe_subscription_id": row.get("stripe_subscription_id"),
+            "enterprise_config": enterprise_config,
         }
     except Exception:
         return defaults
@@ -893,6 +897,81 @@ def delete_secret(key_name: str) -> int:
                 "DELETE FROM admin_secrets WHERE key_name = ?", (key_name,)
             ).rowcount
     return 0
+
+
+# --- enterprise_client_configs ---
+
+def get_enterprise_config(tenant_id: str) -> dict | None:
+    """Returns custom Enterprise config for this tenant, or None if not configured."""
+    if not USE_SUPABASE:
+        return None
+    try:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/enterprise_client_configs",
+            params={"select": "tenant_id,stripe_price_id,amount_display,currency_display",
+                    "tenant_id": f"eq.{tenant_id}"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0] if rows else None
+    except Exception as e:
+        logger.warning("get_enterprise_config failed: %s", e)
+        return None
+
+
+def upsert_enterprise_config(
+    tenant_id: str, stripe_price_id: str, amount_display: float, currency_display: str = "BRL"
+) -> dict:
+    """Creates or updates a custom Enterprise config for a tenant."""
+    if not USE_SUPABASE:
+        return {}
+    payload = {
+        "tenant_id": tenant_id,
+        "stripe_price_id": stripe_price_id,
+        "amount_display": amount_display,
+        "currency_display": currency_display.upper(),
+    }
+    resp = _http.post(
+        f"{_SUPABASE_URL}/rest/v1/enterprise_client_configs",
+        json=payload,
+        headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
+        params={"on_conflict": "tenant_id"}, timeout=10,
+    )
+    resp.raise_for_status()
+    rows = resp.json()
+    return rows[0] if rows else payload
+
+
+def delete_enterprise_config(tenant_id: str) -> int:
+    """Removes custom Enterprise config for a tenant."""
+    if not USE_SUPABASE:
+        return 0
+    resp = _http.delete(
+        f"{_SUPABASE_URL}/rest/v1/enterprise_client_configs",
+        params={"tenant_id": f"eq.{tenant_id}"},
+        headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
+    )
+    resp.raise_for_status()
+    return len(resp.json())
+
+
+def list_enterprise_configs() -> list[dict]:
+    """Lists all enterprise client configs (admin view)."""
+    if not USE_SUPABASE:
+        return []
+    try:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/enterprise_client_configs",
+            params={"select": "tenant_id,stripe_price_id,amount_display,currency_display,created_at",
+                    "order": "created_at.desc"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.warning("list_enterprise_configs failed: %s", e)
+        return []
 
 
 def sync_stripe_plans(stripe_secret_key: str) -> list[dict]:
