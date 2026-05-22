@@ -17,7 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -389,28 +389,28 @@ def visualizar_banco_seguro(
     return JSONResponse(content=records, headers=headers)
 
 
-@_router.get("/database/export", summary="Exporta todos os dados limpos como CSV (streaming)")
+@_router.get("/database/export", summary="Exporta todos os dados limpos como CSV")
 def exportar_csv(painel: PainelOrquestracao = Depends(_get_painel)):
     import csv
     import io
     from datetime import date
 
-    def generate():
-        buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=["name", "email", "cpf", "created_at"])
-        writer.writeheader()
-        yield "﻿" + buf.getvalue()
-        buf.truncate(0)
-        buf.seek(0)
-        for row in repository.iter_clean_records_for_export(painel.tenant_id):
-            writer.writerow(row)
-            yield buf.getvalue()
-            buf.truncate(0)
-            buf.seek(0)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=["name", "email", "cpf"])
+    writer.writeheader()
+    after_id = None
+    while True:
+        page, next_cursor = repository.get_clean_records_paginated(painel.tenant_id, after_id, 500)
+        for row in page:
+            writer.writerow({"name": row["name"], "email": row["email"], "cpf": row["cpf"]})
+        if next_cursor is None:
+            break
+        after_id = next_cursor
 
     today = date.today().isoformat()
-    return StreamingResponse(
-        generate(),
+    content = ("﻿" + buf.getvalue()).encode("utf-8")
+    return Response(
+        content=content,
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="trust-tandem-{today}.csv"'},
     )
