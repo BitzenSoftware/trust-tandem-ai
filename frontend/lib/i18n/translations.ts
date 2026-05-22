@@ -272,6 +272,10 @@ export const translations = {
       redirectingPortal: "Opening management portal...",
       successBanner: "Subscription activated! Welcome aboard.",
       canceledBanner: "Checkout canceled. You can subscribe at any time.",
+      talkToExpert: "Talk to a Specialist",
+      talkToExpertDesc: "For Enterprise plans we schedule a call to understand your operation and LGPD compliance needs.",
+      subscribeNow: "Subscribe Now",
+      contactPrice: "Contact us",
     },
   },
   "pt-BR": {
@@ -545,6 +549,10 @@ export const translations = {
       redirectingPortal: "A abrir portal de gestão...",
       successBanner: "Subscrição ativada! Bem-vindo(a).",
       canceledBanner: "Checkout cancelado. Pode assinar em qualquer altura.",
+      talkToExpert: "Falar com Especialista",
+      talkToExpertDesc: "Para planos Enterprise agendamos uma conversa para entender a sua operação e necessidades de conformidade LGPD.",
+      subscribeNow: "Assinar Agora",
+      contactPrice: "Fale conosco",
     },
   },
 };
