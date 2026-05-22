@@ -896,18 +896,14 @@ def delete_secret(key_name: str) -> int:
 
 
 def sync_stripe_plans(stripe_secret_key: str) -> list[dict]:
-    """Fetches active prices from Stripe and updates admin_plan_configs by product metadata."""
+    """Syncs plan configs from Stripe: iterates products, finds plan_name metadata, picks latest price."""
     import stripe as _stripe
     _stripe.api_key = stripe_secret_key
 
-    best: dict[str, dict] = {}
-    prices = _stripe.Price.list(active=True, expand=["data.product"], limit=100)
-    for price in prices.auto_paging_iter():
+    updated = []
+    products = _stripe.Product.list(active=True, limit=100)
+    for product in products.auto_paging_iter():
         try:
-            product = price.product
-            if isinstance(product, str) or product is None:
-                continue  # not expanded — skip
-            # Convert metadata to plain dict regardless of Stripe SDK version
             raw_meta = getattr(product, "metadata", None)
             try:
                 meta: dict = dict(raw_meta) if raw_meta else {}
@@ -916,27 +912,30 @@ def sync_stripe_plans(stripe_secret_key: str) -> list[dict]:
             plan_name = meta.get("plan_name")
             if not plan_name:
                 continue
-            created = getattr(price, "created", 0) or 0
-            existing = best.get(plan_name)
-            if existing is None or created > existing["created"]:
-                best[plan_name] = {
-                    "price_id": price.id,
-                    "amount": (getattr(price, "unit_amount", None) or 0) / 100.0,
-                    "created": created,
-                }
-        except Exception as inner_exc:
-            logger.warning("sync_stripe_plans: skipping price %s — %s", getattr(price, "id", "?"), inner_exc)
+
+            # Get the most recently created active price for this product
+            product_prices = _stripe.Price.list(product=product.id, active=True, limit=10)
+            best_price = None
+            for price in product_prices.auto_paging_iter():
+                price_created = getattr(price, "created", 0) or 0
+                if best_price is None or price_created > (getattr(best_price, "created", 0) or 0):
+                    best_price = price
+
+            if not best_price:
+                continue
+
+            amount = (getattr(best_price, "unit_amount", None) or 0) / 100.0
+            field_limit = get_plan_field_limit(plan_name)
+            upsert_plan_config(plan_name, field_limit, amount, best_price.id)
+            updated.append({
+                "plan_name": plan_name,
+                "stripe_price_id": best_price.id,
+                "price_monthly": amount,
+            })
+        except Exception as exc:
+            logger.warning("sync_stripe_plans: skipping product %s — %s", getattr(product, "id", "?"), exc)
             continue
 
-    updated = []
-    for plan_name, info in best.items():
-        field_limit = get_plan_field_limit(plan_name)
-        upsert_plan_config(plan_name, field_limit, info["amount"], info["price_id"])
-        updated.append({
-            "plan_name": plan_name,
-            "stripe_price_id": info["price_id"],
-            "price_monthly": info["amount"],
-        })
     return updated
 
 
