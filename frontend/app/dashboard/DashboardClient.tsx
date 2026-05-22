@@ -1511,18 +1511,15 @@ export default function DashboardClient({ token, userName }: { token: string; us
                       </button>
                     ) : (
                       <>
-                        {(publicPlans.find(p => p.plan_name === "pro")?.stripe_price_id) && (
-                          <button onClick={() => handleCheckout("pro")} disabled={subLoading}
-                            style={{ ...s.ingestBtn, opacity: subLoading ? 0.6 : 1 }}>
-                            {subLoading ? t.subscription.redirectingCheckout : `${t.subscription.subscribePro} · R$${publicPlans.find(p => p.plan_name === "pro")?.price_monthly ?? 49}${t.subscription.perMonth}`}
-                          </button>
-                        )}
-                        {(publicPlans.find(p => p.plan_name === "enterprise")?.stripe_price_id) && (
-                          <button onClick={() => handleCheckout("enterprise")} disabled={subLoading}
-                            style={{ ...s.ingestBtn, backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", border: "1px solid var(--border)", opacity: subLoading ? 0.6 : 1 }}>
-                            {subLoading ? t.subscription.redirectingCheckout : `${t.subscription.subscribeEnterprise} · R$${publicPlans.find(p => p.plan_name === "enterprise")?.price_monthly ?? 199}${t.subscription.perMonth}`}
-                          </button>
-                        )}
+                        <button onClick={() => handleCheckout("pro")} disabled={subLoading}
+                          style={{ ...s.ingestBtn, opacity: subLoading ? 0.6 : 1 }}>
+                          {subLoading ? t.subscription.redirectingCheckout : `${t.subscription.subscribeNow} · R$${publicPlans.find(p => p.plan_name === "pro")?.price_monthly ?? 99}${t.subscription.perMonth}`}
+                        </button>
+                        <button
+                          onClick={() => window.open("mailto:bitzensoftware@bitzen.app?subject=Trust%20%26%20Tandem%20AI%20%E2%80%94%20Plano%20Enterprise&body=Ol%C3%A1%2C%20tenho%20interesse%20no%20plano%20Enterprise.%20Podemos%20agendar%20uma%20conversa%3F", "_blank")}
+                          style={{ ...s.ingestBtn, backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", border: "1px solid var(--border)" }}>
+                          {t.subscription.talkToExpert}
+                        </button>
                       </>
                     )}
                   </div>
