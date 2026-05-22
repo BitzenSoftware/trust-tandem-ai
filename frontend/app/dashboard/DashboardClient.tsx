@@ -14,6 +14,7 @@ type FieldSchema    = { field_key: string; label: string; field_type: string; re
 type PlanInfo       = { plan: string; field_limit: number; field_count: number };
 type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null };
 type EnterpriseConfig  = { tenant_id: string; stripe_price_id: string; amount_display: number; currency_display: string };
+type TenantOption      = { tenant_id: string; company_name: string | null; plan: string; subscription_status: string | null };
 type SubscriptionInfo = {
   plan: string; effective_plan: string;
   status: string; // trialing | active | expired | canceled | free
@@ -124,6 +125,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [entClients,    setEntClients]    = useState<EnterpriseConfig[]>([]);
   const [newEntClient,  setNewEntClient]  = useState({ tenant_id: "", stripe_price_id: "", amount_display: "", currency_display: "BRL" });
   const [entClientSaving, setEntClientSaving] = useState(false);
+  const [tenantOptions,   setTenantOptions]   = useState<TenantOption[]>([]);
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [csvMapStep,    setCsvMapStep]    = useState<"upload" | "map" | "ready">("upload");
   const [apiKeys,       setApiKeys]       = useState<{ id: number; label: string | null; created_at: string }[]>([]);
@@ -425,6 +427,15 @@ export default function DashboardClient({ token, userName }: { token: string; us
     try {
       const res = await apiFetch(`${API}/admin/enterprise/clients`, { headers: h });
       if (res.ok) setEntClients(await res.json());
+    } catch { /* ignore */ }
+  }, []);
+
+  const fetchTenantOptions = useCallback(async () => {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    try {
+      const res = await apiFetch(`${API}/admin/tenants`, { headers: h });
+      if (res.ok) setTenantOptions(await res.json());
     } catch { /* ignore */ }
   }, []);
 
@@ -1655,7 +1666,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
                             <p style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)", margin: 0, textTransform: "capitalize" as const }}>{cfg.plan_name}</p>
                             {cfg.plan_name === "enterprise" && (
                               <button
-                                onClick={() => { setShowEntDrawer(true); fetchEnterpriseClients(); }}
+                                onClick={() => { setShowEntDrawer(true); fetchEnterpriseClients(); fetchTenantOptions(); }}
                                 style={{ ...s.diagnoseBtn, fontSize: "0.78rem", fontWeight: 600 }}>
                                 {t.admin.manageEnterpriseClients} →
                               </button>
@@ -2090,9 +2101,16 @@ export default function DashboardClient({ token, userName }: { token: string; us
                 <div style={{ display: "flex", flexDirection: "column" as const, gap: 10 }}>
                   <div>
                     <label style={s.ingestLabel}>{t.admin.clientTenantId}</label>
-                    <input type="text" style={s.ingestInput} placeholder="uuid-do-tenant ou email@empresa.com"
+                    <select style={{ ...s.ingestInput, cursor: "pointer" }}
                       value={newEntClient.tenant_id}
-                      onChange={e => setNewEntClient(p => ({ ...p, tenant_id: e.target.value }))} />
+                      onChange={e => setNewEntClient(p => ({ ...p, tenant_id: e.target.value }))}>
+                      <option value="">— Selecionar empresa —</option>
+                      {tenantOptions.map(opt => (
+                        <option key={opt.tenant_id} value={opt.tenant_id}>
+                          {opt.company_name ? `${opt.company_name} (${opt.plan ?? "starter"})` : opt.tenant_id}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label style={s.ingestLabel}>{t.admin.clientPriceId}</label>
