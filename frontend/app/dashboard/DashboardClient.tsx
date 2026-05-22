@@ -13,11 +13,13 @@ type QueueItem      = { name: string; email_hint: string; cpf_hint: string };
 type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown> };
 type PlanInfo       = { plan: string; field_limit: number; field_count: number };
 type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null };
+type EnterpriseConfig  = { tenant_id: string; stripe_price_id: string; amount_display: number; currency_display: string };
 type SubscriptionInfo = {
   plan: string; effective_plan: string;
   status: string; // trialing | active | expired | canceled | free
   trial_ends_at: string | null; trial_days_left: number | null;
   stripe_customer_id: string | null; stripe_subscription_id: string | null;
+  enterprise_config?: EnterpriseConfig | null;
 };
 type SecretEntry   = { key_name: string; updated_at: string };
 type DiagnosisResult = {
@@ -118,6 +120,10 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [publicPlans,   setPublicPlans]   = useState<PlanConfig[]>([]);
   const [subLoading,    setSubLoading]    = useState(false);
   const [subBanner,     setSubBanner]     = useState<"success" | "canceled" | null>(null);
+  const [showEntDrawer, setShowEntDrawer] = useState(false);
+  const [entClients,    setEntClients]    = useState<EnterpriseConfig[]>([]);
+  const [newEntClient,  setNewEntClient]  = useState({ tenant_id: "", stripe_price_id: "", amount_display: "", currency_display: "BRL" });
+  const [entClientSaving, setEntClientSaving] = useState(false);
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [csvMapStep,    setCsvMapStep]    = useState<"upload" | "map" | "ready">("upload");
   const [apiKeys,       setApiKeys]       = useState<{ id: number; label: string | null; created_at: string }[]>([]);
@@ -413,6 +419,15 @@ export default function DashboardClient({ token, userName }: { token: string; us
     } catch { /* ignore */ }
   }, []);
 
+  const fetchEnterpriseClients = useCallback(async () => {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    try {
+      const res = await apiFetch(`${API}/admin/enterprise/clients`, { headers: h });
+      if (res.ok) setEntClients(await res.json());
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     if (tab === "subscription") fetchSubscription();
   }, [tab, fetchSubscription]);
@@ -445,6 +460,34 @@ export default function DashboardClient({ token, userName }: { token: string; us
       }
     } catch { /* ignore */ }
     finally { setSubLoading(false); }
+  }
+
+  async function handleSaveEnterpriseClient() {
+    if (!newEntClient.tenant_id || !newEntClient.stripe_price_id || !newEntClient.amount_display) return;
+    setEntClientSaving(true);
+    const h = await getFreshHeaders();
+    if (!h) { setEntClientSaving(false); return; }
+    try {
+      const res = await apiFetch(`${API}/admin/enterprise/clients`, {
+        method: "POST", headers: h,
+        body: JSON.stringify({ ...newEntClient, amount_display: Number(newEntClient.amount_display) }),
+      });
+      if (res.ok) {
+        setNewEntClient({ tenant_id: "", stripe_price_id: "", amount_display: "", currency_display: "BRL" });
+        fetchEnterpriseClients();
+      }
+    } catch { /* ignore */ }
+    finally { setEntClientSaving(false); }
+  }
+
+  async function handleDeleteEnterpriseClient(client_tenant_id: string) {
+    if (!confirm(t.admin.confirmDeleteEnterpriseClient)) return;
+    const h = await getFreshHeaders();
+    if (!h) return;
+    await apiFetch(`${API}/admin/enterprise/clients/${encodeURIComponent(client_tenant_id)}`, {
+      method: "DELETE", headers: h,
+    });
+    fetchEnterpriseClients();
   }
 
   function autoMapColumns(columns: string[], currentSchema: FieldSchema[]): Record<string, string> {
@@ -1515,11 +1558,19 @@ export default function DashboardClient({ token, userName }: { token: string; us
                           style={{ ...s.ingestBtn, opacity: subLoading ? 0.6 : 1 }}>
                           {subLoading ? t.subscription.redirectingCheckout : `${t.subscription.subscribeNow} · R$${publicPlans.find(p => p.plan_name === "pro")?.price_monthly ?? 99}${t.subscription.perMonth}`}
                         </button>
-                        <button
-                          onClick={() => window.open("mailto:bitzensoftware@bitzen.app?subject=Trust%20%26%20Tandem%20AI%20%E2%80%94%20Plano%20Enterprise&body=Ol%C3%A1%2C%20tenho%20interesse%20no%20plano%20Enterprise.%20Podemos%20agendar%20uma%20conversa%3F", "_blank")}
-                          style={{ ...s.ingestBtn, backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", border: "1px solid var(--border)" }}>
-                          {t.subscription.talkToExpert}
-                        </button>
+                        {subscription?.enterprise_config ? (
+                          <button onClick={() => handleCheckout("enterprise")} disabled={subLoading}
+                            style={{ ...s.ingestBtn, backgroundColor: "#1e293b", opacity: subLoading ? 0.6 : 1 }}>
+                            {subLoading ? t.subscription.redirectingCheckout
+                              : `${t.subscription.subscribeNow} Enterprise · ${subscription.enterprise_config.currency_display === "BRL" ? "R$" : "$"}${subscription.enterprise_config.amount_display}${t.subscription.perMonth}`}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => window.open("mailto:bitzensoftware@bitzen.app?subject=Trust%20%26%20Tandem%20AI%20%E2%80%94%20Plano%20Enterprise&body=Ol%C3%A1%2C%20tenho%20interesse%20no%20plano%20Enterprise.%20Podemos%20agendar%20uma%20conversa%3F", "_blank")}
+                            style={{ ...s.ingestBtn, backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", border: "1px solid var(--border)" }}>
+                            {t.subscription.talkToExpert}
+                          </button>
+                        )}
                       </>
                     )}
                   </div>
@@ -1600,7 +1651,16 @@ export default function DashboardClient({ token, userName }: { token: string; us
                       const edit = editPlan[cfg.plan_name] || cfg;
                       return (
                         <div key={cfg.plan_name} style={{ backgroundColor: "var(--bg-surface-2)", borderRadius: 12, border: "1px solid var(--border)", padding: "18px 20px" }}>
-                          <p style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 14, textTransform: "capitalize" as const }}>{cfg.plan_name}</p>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                            <p style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)", margin: 0, textTransform: "capitalize" as const }}>{cfg.plan_name}</p>
+                            {cfg.plan_name === "enterprise" && (
+                              <button
+                                onClick={() => { setShowEntDrawer(true); fetchEnterpriseClients(); }}
+                                style={{ ...s.diagnoseBtn, fontSize: "0.78rem", fontWeight: 600 }}>
+                                {t.admin.manageEnterpriseClients} →
+                              </button>
+                            )}
+                          </div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>
                             <div>
                               <label style={s.ingestLabel}>{t.admin.fieldLimit}</label>
@@ -1992,6 +2052,80 @@ export default function DashboardClient({ token, userName }: { token: string; us
               </>
             )}
 
+          </div>
+        </div>
+      )}
+
+      {/* ── ENTERPRISE CLIENTS DRAWER ── */}
+      {showEntDrawer && (
+        <div style={{ position: "fixed" as const, inset: 0, zIndex: 300, display: "flex" }}>
+          <div onClick={() => setShowEntDrawer(false)} style={{ flex: 1, backgroundColor: "rgba(0,0,0,.4)" }} />
+          <div style={{ width: "min(480px, 95vw)", backgroundColor: "var(--bg-surface)", borderLeft: "1px solid var(--border)", boxShadow: "var(--shadow-lg)", overflowY: "auto" as const, display: "flex", flexDirection: "column" as const }}>
+            <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+              <p style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>{t.admin.enterpriseClientsList}</p>
+              <button onClick={() => setShowEntDrawer(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "1.2rem", lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ padding: "20px 24px", flex: 1, display: "flex", flexDirection: "column" as const, gap: 20 }}>
+              {/* Existing clients */}
+              {entClients.length === 0 ? (
+                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>{t.admin.noEnterpriseClients}</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column" as const, gap: 8 }}>
+                  {entClients.map(c => (
+                    <div key={c.tenant_id} style={{ padding: "12px 14px", backgroundColor: "var(--bg-surface-2)", borderRadius: 10, border: "1px solid var(--border)" }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-primary)", fontFamily: "var(--font-geist-mono)", wordBreak: "break-all" as const, flex: 1 }}>{c.tenant_id}</span>
+                        <button onClick={() => handleDeleteEnterpriseClient(c.tenant_id)} style={{ ...s.revokeBtn, flexShrink: 0 }}>{t.admin.deleteEnterpriseClient}</button>
+                      </div>
+                      <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", margin: 0 }}>
+                        {c.currency_display === "BRL" ? "R$" : "$"}{c.amount_display}/mês · <span style={{ fontFamily: "var(--font-geist-mono)" }}>{c.stripe_price_id}</span>
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Add new client */}
+              <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+                <p style={{ fontSize: "0.85rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 12 }}>+ {t.admin.saveEnterpriseClient}</p>
+                <div style={{ display: "flex", flexDirection: "column" as const, gap: 10 }}>
+                  <div>
+                    <label style={s.ingestLabel}>{t.admin.clientTenantId}</label>
+                    <input type="text" style={s.ingestInput} placeholder="uuid-do-tenant ou email@empresa.com"
+                      value={newEntClient.tenant_id}
+                      onChange={e => setNewEntClient(p => ({ ...p, tenant_id: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label style={s.ingestLabel}>{t.admin.clientPriceId}</label>
+                    <input type="text" style={s.ingestInput} placeholder="price_xxx"
+                      value={newEntClient.stripe_price_id}
+                      onChange={e => setNewEntClient(p => ({ ...p, stripe_price_id: e.target.value }))} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8 }}>
+                    <div>
+                      <label style={s.ingestLabel}>{t.admin.clientAmount}</label>
+                      <input type="number" min={0} step={0.01} style={s.ingestInput} placeholder="800.00"
+                        value={newEntClient.amount_display}
+                        onChange={e => setNewEntClient(p => ({ ...p, amount_display: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label style={s.ingestLabel}>{t.admin.clientCurrency}</label>
+                      <select style={{ ...s.ingestInput, cursor: "pointer" }}
+                        value={newEntClient.currency_display}
+                        onChange={e => setNewEntClient(p => ({ ...p, currency_display: e.target.value }))}>
+                        <option value="BRL">BRL (R$)</option>
+                        <option value="USD">USD ($)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleSaveEnterpriseClient}
+                    disabled={entClientSaving || !newEntClient.tenant_id || !newEntClient.stripe_price_id || !newEntClient.amount_display}
+                    style={{ ...s.ingestBtn, opacity: entClientSaving || !newEntClient.tenant_id || !newEntClient.stripe_price_id || !newEntClient.amount_display ? 0.6 : 1 }}>
+                    {entClientSaving ? t.admin.saving : t.admin.saveEnterpriseClient}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
