@@ -17,7 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -387,6 +387,33 @@ def visualizar_banco_seguro(
     if next_cursor is not None:
         headers["X-Next-Cursor"] = str(next_cursor)
     return JSONResponse(content=records, headers=headers)
+
+
+@_router.get("/database/export", summary="Exporta todos os dados limpos como CSV (streaming)")
+def exportar_csv(painel: PainelOrquestracao = Depends(_get_painel)):
+    import csv
+    import io
+    from datetime import date
+
+    def generate():
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=["name", "email", "cpf", "created_at"])
+        writer.writeheader()
+        yield "﻿" + buf.getvalue()
+        buf.truncate(0)
+        buf.seek(0)
+        for row in repository.iter_clean_records_for_export(painel.tenant_id):
+            writer.writerow(row)
+            yield buf.getvalue()
+            buf.truncate(0)
+            buf.seek(0)
+
+    today = date.today().isoformat()
+    return StreamingResponse(
+        generate(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="trust-tandem-{today}.csv"'},
+    )
 
 
 @_router.post("/resolve", response_model=RespostaIngestao,
