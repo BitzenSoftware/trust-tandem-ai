@@ -324,6 +324,13 @@ class CheckoutIn(BaseModel):
     plan_name: str
 
 
+class EnterpriseClientIn(BaseModel):
+    tenant_id: str
+    stripe_price_id: str
+    amount_display: float
+    currency_display: str = "BRL"
+
+
 def _get_stripe_key() -> str:
     """Returns Stripe secret key from env var or encrypted vault."""
     key = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -737,10 +744,21 @@ def criar_checkout(body: CheckoutIn, tenant_id: str = Depends(_get_tenant_id)):
         raise HTTPException(status_code=503, detail="Stripe não configurado no servidor.")
     _stripe.api_key = stripe_key
 
-    configs = repository.get_plan_configs()
-    plan_cfg = next((c for c in configs if c["plan_name"] == body.plan_name), None)
-    if not plan_cfg or not plan_cfg.get("stripe_price_id"):
-        raise HTTPException(status_code=400, detail=f"Price ID para o plano '{body.plan_name}' não configurado.")
+    # Enterprise: cada tenant precisa de config customizada; 403 se não configurado
+    if body.plan_name == "enterprise":
+        custom = repository.get_enterprise_config(tenant_id)
+        if not custom:
+            raise HTTPException(
+                status_code=403,
+                detail="Plano Enterprise requer alinhamento comercial. Entre em contacto com a equipa de vendas.",
+            )
+        price_id = custom["stripe_price_id"]
+    else:
+        configs = repository.get_plan_configs()
+        plan_cfg = next((c for c in configs if c["plan_name"] == body.plan_name), None)
+        if not plan_cfg or not plan_cfg.get("stripe_price_id"):
+            raise HTTPException(status_code=400, detail=f"Price ID para o plano '{body.plan_name}' não configurado.")
+        price_id = plan_cfg["stripe_price_id"]
 
     sub_info = repository.get_tenant_subscription(tenant_id)
     customer_id = sub_info.get("stripe_customer_id")
@@ -749,7 +767,7 @@ def criar_checkout(body: CheckoutIn, tenant_id: str = Depends(_get_tenant_id)):
     try:
         kwargs: dict = {
             "mode": "subscription",
-            "line_items": [{"price": plan_cfg["stripe_price_id"], "quantity": 1}],
+            "line_items": [{"price": price_id, "quantity": 1}],
             "metadata": {"tenant_id": tenant_id, "plan_name": body.plan_name},
             "success_url": f"{frontend_url}/dashboard?sub=success",
             "cancel_url": f"{frontend_url}/dashboard?sub=canceled",
@@ -801,6 +819,32 @@ def sincronizar_stripe():
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Erro ao sincronizar com Stripe: {type(e).__name__}: {e}")
     return {"synced": len(updated), "plans": updated}
+
+
+@_router.get("/admin/enterprise/clients",
+             summary="Lista configs de clientes Enterprise [super admin]",
+             dependencies=[Depends(_require_super_admin)])
+def listar_enterprise_clients():
+    return repository.list_enterprise_configs()
+
+
+@_router.post("/admin/enterprise/clients", status_code=status.HTTP_201_CREATED,
+              summary="Cria ou actualiza config Enterprise de um cliente [super admin]",
+              dependencies=[Depends(_require_super_admin)])
+def upsert_enterprise_client(body: EnterpriseClientIn):
+    return repository.upsert_enterprise_config(
+        body.tenant_id, body.stripe_price_id, body.amount_display, body.currency_display
+    )
+
+
+@_router.delete("/admin/enterprise/clients/{client_tenant_id}",
+                status_code=status.HTTP_204_NO_CONTENT,
+                summary="Remove config Enterprise de um cliente [super admin]",
+                dependencies=[Depends(_require_super_admin)])
+def deletar_enterprise_client(client_tenant_id: str):
+    deleted = repository.delete_enterprise_config(client_tenant_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Config Enterprise para '{client_tenant_id}' não encontrada.")
 
 
 @_router.delete("/schema/fields/{field_key}", status_code=status.HTTP_204_NO_CONTENT,
