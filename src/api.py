@@ -376,17 +376,19 @@ def listar_fila_revisao(painel: PainelOrquestracao = Depends(_get_painel)):
     ]
 
 
-@_router.get("/database", summary="Retorna dados mascarados aprovados — cursor-based pagination")
+@_router.get("/database", summary="Retorna dados mascarados no display — dados reais no CSV/webhook")
 def visualizar_banco_seguro(
     painel: PainelOrquestracao = Depends(_get_painel),
     limit: int = Query(default=500, ge=1, le=1000, description="Registros por página (máx 1000)"),
     after_id: Optional[int] = Query(default=None, description="Cursor: ID do último registo recebido"),
 ):
+    from masking import mask_email, mask_cpf
     records, next_cursor = repository.get_clean_records_paginated(painel.tenant_id, after_id, limit)
+    masked = [{"name": r["name"], "email": mask_email(r["email"]), "cpf": mask_cpf(r["cpf"])} for r in records]
     headers: dict[str, str] = {"X-Has-More": "true" if next_cursor is not None else "false"}
     if next_cursor is not None:
         headers["X-Next-Cursor"] = str(next_cursor)
-    return JSONResponse(content=records, headers=headers)
+    return JSONResponse(content=masked, headers=headers)
 
 
 @_router.get("/database/export", summary="Exporta todos os dados limpos como CSV")
