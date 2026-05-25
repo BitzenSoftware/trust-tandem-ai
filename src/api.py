@@ -983,4 +983,14 @@ async def stripe_webhook(request: Request):
     return JSONResponse({"received": True})
 
 
+@app.get("/api/v1/plans/public", summary="Retorna planos disponíveis para a landing page (sem auth)")
+def planos_publicos():
+    configs = repository.get_plan_configs()
+    configs_sorted = sorted(configs, key=lambda c: c.get("price_monthly") or 0)
+    return JSONResponse([
+        {"plan_name": c["plan_name"], "price_monthly": c.get("price_monthly") or 0}
+        for c in configs_sorted
+    ])
+
+
 app.include_router(_router)
