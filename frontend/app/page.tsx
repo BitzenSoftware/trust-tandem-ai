@@ -99,9 +99,43 @@ function CheckIcon({ color = "var(--success)" }: { color?: string }) {
 
 const W: React.CSSProperties = { maxWidth: 1200, margin: "0 auto", width: "100%" };
 
+const PLAN_META: Record<string, { desc: string; highlight: boolean; cta: string; ctaHref: string; features: string[] }> = {
+  starter: {
+    desc: "Para DPOs e equipes técnicas validarem o fluxo HITL e integrarem a API.",
+    highlight: false, cta: "Criar Conta Gratuita", ctaHref: "/register",
+    features: ["Até 1.000 registros/mês", "Upload CSV e formulário manual", "50 diagnósticos do Agente/mês", "1 Webhook de saída", "1 API Key por tenant", "Sem SLA garantido"],
+  },
+  pro: {
+    desc: "Para mid-market que processa bases de dados de clientes de forma recorrente.",
+    highlight: true, cta: "Agendar Demonstração", ctaHref: "/register",
+    features: ["Até 50.000 registros/mês", "Chunking automático de CSV", "Diagnósticos do Agente ilimitados", "Webhooks ilimitados com HMAC-SHA256", "5 API Keys por tenant", "SLA 99,5% de uptime"],
+  },
+  enterprise: {
+    desc: "Para grandes volumes, SLA dedicado e deploys perimetrais on-premise.",
+    highlight: false, cta: "Falar com Comercial", ctaHref: "/register",
+    features: ["Volume customizado e ilimitado", "Deploy perimetral (on-premise / VPC)", "SLA dedicado com suporte 24/7", "Integração SSO/SAML", "Relatório de conformidade ANPD", "Onboarding e treinamento dedicados"],
+  },
+};
+
+function formatPrice(planName: string, price: number): { label: string; period: string } {
+  if (price === 0) return { label: "Gratuito", period: "" };
+  if (planName === "enterprise") return { label: "Sob consulta", period: "" };
+  return { label: `R$ ${price.toLocaleString("pt-BR")}`, period: "/mês" };
+}
+
 export default function LandingPage() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [scrolled, setScrolled] = useState(false);
+  const [plans, setPlans] = useState<{ plan_name: string; price_monthly: number }[]>([]);
+
+  useEffect(() => {
+    const url = process.env.NEXT_PUBLIC_API_URL;
+    if (!url) return;
+    fetch(`${url}/api/v1/plans/public`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (Array.isArray(data) && data.length > 0) setPlans(data); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const saved = (localStorage.getItem("theme") ||
@@ -656,128 +690,87 @@ export default function LandingPage() {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 22, maxWidth: 940, margin: "0 auto" }}>
-            {[
-              {
-                name: "Sandbox",
-                price: "Gratuito",
-                period: "",
-                desc: "Para DPOs e equipes técnicas validarem o fluxo HITL e integrarem a API.",
-                highlight: false,
-                cta: "Criar Conta Gratuita",
-                features: [
-                  "Até 1.000 registros/mês",
-                  "Upload CSV e formulário manual",
-                  "50 diagnósticos do Agente/mês",
-                  "1 Webhook de saída",
-                  "1 API Key por tenant",
-                  "Sem SLA garantido",
-                ],
-              },
-              {
-                name: "Growth",
-                price: "R$ 497",
-                period: "/mês",
-                desc: "Para mid-market que processa bases de dados de clientes de forma recorrente.",
-                highlight: true,
-                cta: "Agendar Demonstração",
-                features: [
-                  "Até 50.000 registros/mês",
-                  "Chunking automático de CSV",
-                  "Diagnósticos do Agente ilimitados",
-                  "Webhooks ilimitados com HMAC-SHA256",
-                  "5 API Keys por tenant",
-                  "SLA 99,5% de uptime",
-                ],
-              },
-              {
-                name: "Enterprise",
-                price: "Sob consulta",
-                period: "",
-                desc: "Para grandes volumes, SLA dedicado e deploys perimetrais on-premise.",
-                highlight: false,
-                cta: "Falar com Comercial",
-                features: [
-                  "Volume customizado e ilimitado",
-                  "Deploy perimetral (on-premise / VPC)",
-                  "SLA dedicado com suporte 24/7",
-                  "Integração SSO/SAML",
-                  "Relatório de conformidade ANPD",
-                  "Onboarding e treinamento dedicados",
-                ],
-              },
-            ].map(plan => (
-              <div key={plan.name} style={{
-                backgroundColor: plan.highlight ? "var(--accent)" : "var(--bg-surface)",
-                border: plan.highlight ? "2px solid var(--accent)" : "1px solid var(--border)",
-                borderRadius: 18, padding: "34px 26px",
-                boxShadow: plan.highlight ? "0 8px 32px rgba(59,130,246,.3)" : "var(--shadow-sm)",
-                position: "relative",
-              }}>
-                {plan.highlight && (
-                  <div style={{
-                    position: "absolute", top: -13, left: "50%", transform: "translateX(-50%)",
-                    backgroundColor: "#fff", color: "var(--accent)",
-                    padding: "3px 14px", borderRadius: 20,
-                    fontSize: "0.67rem", fontWeight: 800,
-                    border: "2px solid var(--accent)", letterSpacing: "0.06em",
-                    textTransform: "uppercase" as const, whiteSpace: "nowrap" as const,
-                  }}>
-                    Mais Popular
-                  </div>
-                )}
-                <div style={{ marginBottom: 4 }}>
-                  <span style={{
-                    fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.06em",
-                    textTransform: "uppercase" as const,
-                    color: plan.highlight ? "rgba(255,255,255,0.75)" : "var(--text-muted)",
-                  }}>
-                    {plan.name}
-                  </span>
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 8 }}>
-                  <span style={{
-                    fontSize: "1.9rem", fontWeight: 800, letterSpacing: "-0.04em",
-                    color: plan.highlight ? "#fff" : "var(--text-primary)",
-                  }}>
-                    {plan.price}
-                  </span>
-                  {plan.period && (
-                    <span style={{ fontSize: "0.82rem", color: plan.highlight ? "rgba(255,255,255,0.7)" : "var(--text-muted)" }}>
-                      {plan.period}
-                    </span>
-                  )}
-                </div>
-                <p style={{
-                  fontSize: "0.82rem", lineHeight: 1.55, marginBottom: 22,
-                  color: plan.highlight ? "rgba(255,255,255,0.8)" : "var(--text-secondary)",
+            {(plans.length > 0 ? plans : [
+              { plan_name: "starter", price_monthly: 0 },
+              { plan_name: "pro",     price_monthly: 497 },
+              { plan_name: "enterprise", price_monthly: -1 },
+            ]).map(p => {
+              const meta = PLAN_META[p.plan_name] ?? PLAN_META["starter"];
+              const { label, period } = formatPrice(p.plan_name, p.price_monthly);
+              return (
+                <div key={p.plan_name} style={{
+                  backgroundColor: meta.highlight ? "var(--accent)" : "var(--bg-surface)",
+                  border: meta.highlight ? "2px solid var(--accent)" : "1px solid var(--border)",
+                  borderRadius: 18, padding: "34px 26px",
+                  boxShadow: meta.highlight ? "0 8px 32px rgba(59,130,246,.3)" : "var(--shadow-sm)",
+                  position: "relative",
                 }}>
-                  {plan.desc}
-                </p>
-                <Link href="/register" style={{
-                  display: "block", textAlign: "center", padding: "10px 0",
-                  backgroundColor: plan.highlight ? "#fff" : "var(--accent)",
-                  color: plan.highlight ? "var(--accent)" : "#fff",
-                  borderRadius: 10, textDecoration: "none",
-                  fontSize: "0.86rem", fontWeight: 700, marginBottom: 22,
-                }}>
-                  {plan.cta}
-                </Link>
-                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 9 }}>
-                  {plan.features.map(f => (
-                    <li key={f} style={{
-                      display: "flex", alignItems: "flex-start", gap: 8,
-                      fontSize: "0.82rem", lineHeight: 1.45,
-                      color: plan.highlight ? "rgba(255,255,255,0.9)" : "var(--text-secondary)",
+                  {meta.highlight && (
+                    <div style={{
+                      position: "absolute", top: -13, left: "50%", transform: "translateX(-50%)",
+                      backgroundColor: "#fff", color: "var(--accent)",
+                      padding: "3px 14px", borderRadius: 20,
+                      fontSize: "0.67rem", fontWeight: 800,
+                      border: "2px solid var(--accent)", letterSpacing: "0.06em",
+                      textTransform: "uppercase" as const, whiteSpace: "nowrap" as const,
                     }}>
-                      <span style={{ flexShrink: 0, marginTop: 1 }}>
-                        <CheckIcon color={plan.highlight ? "#fff" : "var(--success)"} />
+                      Mais Popular
+                    </div>
+                  )}
+                  <div style={{ marginBottom: 4 }}>
+                    <span style={{
+                      fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.06em",
+                      textTransform: "uppercase" as const,
+                      color: meta.highlight ? "rgba(255,255,255,0.75)" : "var(--text-muted)",
+                    }}>
+                      {p.plan_name}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 8 }}>
+                    <span style={{
+                      fontSize: "1.9rem", fontWeight: 800, letterSpacing: "-0.04em",
+                      color: meta.highlight ? "#fff" : "var(--text-primary)",
+                    }}>
+                      {label}
+                    </span>
+                    {period && (
+                      <span style={{ fontSize: "0.82rem", color: meta.highlight ? "rgba(255,255,255,0.7)" : "var(--text-muted)" }}>
+                        {period}
                       </span>
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
+                    )}
+                  </div>
+                  <p style={{
+                    fontSize: "0.82rem", lineHeight: 1.55, marginBottom: 22,
+                    color: meta.highlight ? "rgba(255,255,255,0.8)" : "var(--text-secondary)",
+                  }}>
+                    {meta.desc}
+                  </p>
+                  <Link href={meta.ctaHref} style={{
+                    display: "block", textAlign: "center", padding: "10px 0",
+                    backgroundColor: meta.highlight ? "#fff" : "var(--accent)",
+                    color: meta.highlight ? "var(--accent)" : "#fff",
+                    borderRadius: 10, textDecoration: "none",
+                    fontSize: "0.86rem", fontWeight: 700, marginBottom: 22,
+                  }}>
+                    {meta.cta}
+                  </Link>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 9 }}>
+                    {meta.features.map(f => (
+                      <li key={f} style={{
+                        display: "flex", alignItems: "flex-start", gap: 8,
+                        fontSize: "0.82rem", lineHeight: 1.45,
+                        color: meta.highlight ? "rgba(255,255,255,0.9)" : "var(--text-secondary)",
+                      }}>
+                        <span style={{ flexShrink: 0, marginTop: 1 }}>
+                          <CheckIcon color={meta.highlight ? "#fff" : "var(--success)"} />
+                        </span>
+                        {f}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>
