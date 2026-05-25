@@ -118,11 +118,11 @@ class PainelOrquestracao:
         return repository.remove_from_queue(name, self.tenant_id)
 
     def resolver_direto(self, merged: dict) -> None:
-        """Saves directly to clean records with masking — bypasses re-queue logic."""
+        """Saves real (unmasked) data to clean_records — masking applied at display time."""
         repository.save({
             "name":  merged["name"],
-            "email": mask_email(merged.get("email") or ""),
-            "cpf":   mask_cpf(merged.get("cpf") or ""),
+            "email": merged.get("email") or "",
+            "cpf":   merged.get("cpf") or "",
             **{k: v for k, v in merged.items() if k not in ("name", "email", "cpf")},
         }, self.tenant_id)
 
