@@ -138,6 +138,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [webhookCurrent, setWebhookCurrent] = useState<{ url: string; secret: string; active: boolean } | null>(null);
   const [webhookLoading, setWebhookLoading] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [trialExpired,   setTrialExpired]   = useState(false);
 
   // ── Bulk approval state ──────────────────────────────────────────────────
   const [selectedNames,  setSelectedNames]  = useState<string[]>([]);
@@ -189,6 +190,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
         setIsSuperAdmin(prof.is_super_admin);
       }
       if (dbRes.ok) setDb(await dbRes.json());
+      else if (dbRes.status === 402) { setTrialExpired(true); }
       else if (dbRes.status === 403) setError(t.dashboard.err403);
       else if (dbRes.status === 401) {
         try { const b = await dbRes.clone().json(); setError(`${t.dashboard.err401} (${b.detail})`); }
@@ -920,6 +922,49 @@ export default function DashboardClient({ token, userName }: { token: string; us
     loadingHint:      { color: "var(--text-muted)", fontSize: "0.75rem", marginTop: 4 },
     loadingTimer:     { color: "var(--text-muted)", fontSize: "0.72rem", marginTop: 8, fontVariantNumeric: "tabular-nums" as const },
   };
+
+  if (trialExpired) {
+    return (
+      <div style={{ ...s.page, display: "flex", flexDirection: "column" }}>
+        {/* Header still visible */}
+        <header style={{ ...s.header, padding: "0 24px" }}>
+          <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
+            <div>
+              <div style={s.logo}>Trust & Tandem AI</div>
+              <div style={s.logoSub}>{t.dashboard.subtitle}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={s.userName}>{userName}</span>
+              <button onClick={handleLogout} style={s.logoutBtn}>{t.dashboard.logout}</button>
+            </div>
+          </div>
+        </header>
+        {/* Trial expired gate */}
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 32 }}>
+          <div style={{ ...s.card, maxWidth: 480, width: "100%", textAlign: "center", padding: "48px 40px" }}>
+            <div style={{ fontSize: "3rem", marginBottom: 16 }}>🔒</div>
+            <h2 style={{ fontSize: "1.3rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 8 }}>
+              Trial de 15 dias expirado
+            </h2>
+            <p style={{ fontSize: "0.88rem", color: "var(--text-secondary)", marginBottom: 28, lineHeight: 1.6 }}>
+              Seu período de teste gratuito chegou ao fim. Assine um plano para continuar acessando o Trust & Tandem AI.
+            </p>
+            <button
+              onClick={async () => {
+                setTrialExpired(false);
+                setTab("subscription");
+                await fetchSubscription();
+              }}
+              style={{ ...s.ingestBtn, width: "100%", padding: "14px 24px", fontSize: "0.95rem" }}
+            >
+              Ver Planos e Assinar
+            </button>
+          </div>
+        </div>
+        {/* Subscription tab content is rendered below in invisible mode so fetchSubscription works */}
+      </div>
+    );
+  }
 
   return (
     <div style={s.page}>
