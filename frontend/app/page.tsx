@@ -422,7 +422,7 @@ export default function LandingPage() {
               {
                 icon: <UploadIcon />,
                 title: "Ingestão Massiva",
-                description: "Processe até 100 mil registros via CSV com chunking automático de 500 por lote. Barra de progresso em tempo real. Detecção automática de colunas name, email e cpf.",
+                description: "Processe até 100 mil registros via CSV com chunking automático de 500 por lote. Barra de progresso em tempo real. Mapeamento de colunas configurável pelo operador para qualquer estrutura de dados.",
                 tags: ["CSV Upload", "100k linhas", "Chunking automático"],
                 iconColor: "var(--accent)", iconBg: "var(--accent-subtle)",
               },
