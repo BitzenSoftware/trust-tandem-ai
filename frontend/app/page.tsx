@@ -99,18 +99,23 @@ function CheckIcon({ color = "var(--success)" }: { color?: string }) {
 
 const W: React.CSSProperties = { maxWidth: 1200, margin: "0 auto", width: "100%" };
 
-const PLAN_META: Record<string, { desc: string; highlight: boolean; cta: string; ctaHref: string; features: string[] }> = {
+const PLAN_ORDER: Record<string, number> = { starter: 0, pro: 1, enterprise: 2 };
+
+const PLAN_META: Record<string, { displayName: string; desc: string; highlight: boolean; cta: string; ctaHref: string; features: string[] }> = {
   starter: {
-    desc: "Para DPOs e equipes técnicas validarem o fluxo HITL e integrarem a API.",
-    highlight: false, cta: "Criar Conta Gratuita", ctaHref: "/register",
-    features: ["Até 1.000 registros/mês", "Upload CSV e formulário manual", "50 diagnósticos do Agente/mês", "1 Webhook de saída", "1 API Key por tenant", "Sem SLA garantido"],
+    displayName: "Trial",
+    desc: "15 dias para testar o fluxo completo HITL e integrar a API sem compromisso.",
+    highlight: false, cta: "Começar Trial Gratuito", ctaHref: "/register",
+    features: ["15 dias de acesso completo", "Upload CSV e formulário manual", "Diagnósticos do Agente incluídos", "1 Webhook de saída", "1 API Key por tenant", "Sem cartão de crédito"],
   },
   pro: {
+    displayName: "Pro",
     desc: "Para mid-market que processa bases de dados de clientes de forma recorrente.",
     highlight: true, cta: "Agendar Demonstração", ctaHref: "/register",
     features: ["Até 50.000 registros/mês", "Chunking automático de CSV", "Diagnósticos do Agente ilimitados", "Webhooks ilimitados com HMAC-SHA256", "5 API Keys por tenant", "SLA 99,5% de uptime"],
   },
   enterprise: {
+    displayName: "Enterprise",
     desc: "Para grandes volumes, SLA dedicado e deploys perimetrais on-premise.",
     highlight: false, cta: "Falar com Comercial", ctaHref: "/register",
     features: ["Volume customizado e ilimitado", "Deploy perimetral (on-premise / VPC)", "SLA dedicado com suporte 24/7", "Integração SSO/SAML", "Relatório de conformidade ANPD", "Onboarding e treinamento dedicados"],
@@ -118,8 +123,9 @@ const PLAN_META: Record<string, { desc: string; highlight: boolean; cta: string;
 };
 
 function formatPrice(planName: string, price: number): { label: string; period: string } {
-  if (price === 0) return { label: "Gratuito", period: "" };
+  if (planName === "starter") return { label: "15 dias grátis", period: "" };
   if (planName === "enterprise") return { label: "Sob consulta", period: "" };
+  if (price === 0) return { label: "Gratuito", period: "" };
   return { label: `R$ ${price.toLocaleString("pt-BR")}`, period: "/mês" };
 }
 
@@ -690,12 +696,12 @@ export default function LandingPage() {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 22, maxWidth: 940, margin: "0 auto" }}>
-            {(plans.length > 0 ? plans : [
+            {(plans.length > 0 ? [...plans].sort((a, b) => (PLAN_ORDER[a.plan_name] ?? 99) - (PLAN_ORDER[b.plan_name] ?? 99)) : [
               { plan_name: "starter", price_monthly: 0 },
               { plan_name: "pro",     price_monthly: 497 },
-              { plan_name: "enterprise", price_monthly: -1 },
+              { plan_name: "enterprise", price_monthly: 0 },
             ]).map(p => {
-              const meta = PLAN_META[p.plan_name] ?? PLAN_META["starter"];
+              const meta = PLAN_META[p.plan_name] ?? PLAN_META["pro"];
               const { label, period } = formatPrice(p.plan_name, p.price_monthly);
               return (
                 <div key={p.plan_name} style={{
@@ -723,7 +729,7 @@ export default function LandingPage() {
                       textTransform: "uppercase" as const,
                       color: meta.highlight ? "rgba(255,255,255,0.75)" : "var(--text-muted)",
                     }}>
-                      {p.plan_name}
+                      {meta.displayName}
                     </span>
                   </div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 8 }}>
