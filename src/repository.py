@@ -82,10 +82,15 @@ def init_db() -> None:
                 required         INTEGER DEFAULT 1,
                 position         INTEGER DEFAULT 0,
                 validation_rules TEXT DEFAULT '{}',
+                is_sensitive     INTEGER DEFAULT 0,
                 created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(tenant_id, field_key)
             )
         """)
+        try:
+            conn.execute("ALTER TABLE tenant_field_schemas ADD COLUMN is_sensitive INTEGER DEFAULT 0")
+        except Exception:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tenant_api_keys (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
