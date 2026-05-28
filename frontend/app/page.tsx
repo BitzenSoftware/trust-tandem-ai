@@ -783,9 +783,10 @@ export default function LandingPage() {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 22, maxWidth: 940, margin: "0 auto" }}>
             {(plans.length > 0 ? [...plans].sort((a, b) => (PLAN_ORDER[a.plan_name] ?? 99) - (PLAN_ORDER[b.plan_name] ?? 99)) : [
-              { plan_name: "starter", price_monthly: 0 },
-              { plan_name: "pro",     price_monthly: 497 },
-              { plan_name: "enterprise", price_monthly: 0 },
+              { plan_name: "starter",      price_monthly: 0 },
+              { plan_name: "pro",          price_monthly: 497 },
+              { plan_name: "professional", price_monthly: 1490 },
+              { plan_name: "enterprise",   price_monthly: 0 },
             ]).map(p => {
               const meta = PLAN_META[p.plan_name] ?? PLAN_META["pro"];
               const { label, period } = formatPrice(p.plan_name, p.price_monthly);
@@ -937,6 +938,7 @@ export default function LandingPage() {
                   { label: "Funcionalidades", href: "#features" },
                   { label: "Segurança Enterprise", href: "#enterprise" },
                   { label: "Planos e Preços", href: "#pricing" },
+                  { label: "FAQ", href: "#faq" },
                   { label: "Documentação da API", href: "/login" },
                 ].map(l => (
                   <a key={l.label} href={l.href} style={{ fontSize: "0.83rem", color: "var(--text-secondary)", textDecoration: "none" }}>
