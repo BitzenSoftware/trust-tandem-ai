@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { trackEvent } from "@/lib/gtag";
 
 function SunIcon() {
   return (
@@ -335,7 +336,7 @@ export default function LandingPage() {
             </p>
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <Link href="/register" style={{
+              <Link href="/register" onClick={() => trackEvent("cta_click", { location: "hero", label: "Agendar Demonstração" })} style={{
                 padding: "13px 28px", backgroundColor: "var(--accent)", color: "#fff",
                 borderRadius: 10, textDecoration: "none", fontSize: "0.9rem", fontWeight: 700,
                 boxShadow: "0 4px 14px rgba(59,130,246,.35)",
@@ -836,13 +837,17 @@ export default function LandingPage() {
                   }}>
                     {meta.desc}
                   </p>
-                  <Link href={meta.ctaHref} style={{
-                    display: "block", textAlign: "center", padding: "10px 0",
-                    backgroundColor: meta.highlight ? "#fff" : "var(--accent)",
-                    color: meta.highlight ? "var(--accent)" : "#fff",
-                    borderRadius: 10, textDecoration: "none",
-                    fontSize: "0.86rem", fontWeight: 700, marginBottom: 22,
-                  }}>
+                  <Link
+                    href={meta.ctaHref}
+                    onClick={() => trackEvent("cta_click", { location: "pricing", plan: p.plan_name, label: meta.cta })}
+                    style={{
+                      display: "block", textAlign: "center", padding: "10px 0",
+                      backgroundColor: meta.highlight ? "#fff" : "var(--accent)",
+                      color: meta.highlight ? "var(--accent)" : "#fff",
+                      borderRadius: 10, textDecoration: "none",
+                      fontSize: "0.86rem", fontWeight: 700, marginBottom: 22,
+                    }}
+                  >
                     {meta.cta}
                   </Link>
                   <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 9 }}>
@@ -885,14 +890,14 @@ export default function LandingPage() {
             Empresas com mais de 50 mil clientes já estão expostas. Cada dia sem governança é responsabilidade direta do DPO.
           </p>
           <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-            <Link href="/register" style={{
+            <Link href="/register" onClick={() => trackEvent("cta_click", { location: "banner", label: "Criar Conta Gratuita" })} style={{
               padding: "13px 30px", backgroundColor: "#fff", color: "var(--accent)",
               borderRadius: 10, textDecoration: "none", fontSize: "0.9rem", fontWeight: 700,
               boxShadow: "0 4px 16px rgba(0,0,0,.15)",
             }}>
               Criar Conta Gratuita
             </Link>
-            <Link href="/login" style={{
+            <Link href="/login" onClick={() => trackEvent("cta_click", { location: "banner", label: "Já tenho conta" })} style={{
               padding: "13px 30px", backgroundColor: "transparent", color: "#fff",
               borderRadius: 10, textDecoration: "none", fontSize: "0.9rem", fontWeight: 600,
               border: "2px solid rgba(255,255,255,0.5)",
