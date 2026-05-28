@@ -135,6 +135,66 @@ function formatPrice(planName: string, price: number): { label: string; period: 
   return { label: `R$ ${price.toLocaleString("pt-BR")}`, period: "/mês" };
 }
 
+const FAQ_ITEMS = [
+  {
+    q: "Qual modelo de IA é utilizado? Meus dados são enviados para terceiros?",
+    a: "Utilizamos Claude (Anthropic). Antes de qualquer chamada à IA, os dados são mascarados na borda — o modelo recebe apenas a representação parcial do campo com problema, nunca o dado real do cliente. A Anthropic não usa dados de chamadas de API para treinar seus modelos.",
+  },
+  {
+    q: "Por que o custo de IA na ingestão é R$ 0?",
+    a: "A triagem inicial usa regras de validação locais (formato de CPF, e-mail, CEP, telefone). A IA só é acionada quando o operador clica em 'Diagnosticar' um registro específico na fila de revisão humana. Por isso, o processamento em massa tem custo zero — o diagnóstico avançado já está incluso na mensalidade.",
+  },
+  {
+    q: "Por quanto tempo meus dados ficam armazenados nos servidores?",
+    a: "Registros aprovados são movidos imediatamente para o banco limpo do seu tenant isolado. Registros na fila HITL permanecem disponíveis até o operador decidir (aprovar ou expurgar). Não há retenção de dados brutos após a ação humana.",
+  },
+  {
+    q: "Meus dados ficam misturados com os de outros clientes?",
+    a: "Não. Cada cliente opera em um tenant completamente isolado, com Row Level Security (RLS) via Supabase. Não existe acesso cruzado entre contas — a arquitetura multi-tenant garante isolamento total em nível de banco de dados.",
+  },
+];
+
+function FaqSection() {
+  const [open, setOpen] = useState<number | null>(null);
+  const W = { maxWidth: 800, margin: "0 auto" };
+  return (
+    <section id="faq" style={{ padding: "96px clamp(16px, 5vw, 80px)", backgroundColor: "var(--bg-surface-2)" }}>
+      <div style={W}>
+        <div style={{ textAlign: "center", marginBottom: 48 }}>
+          <span style={{ fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" as const, color: "var(--accent)" }}>
+            Perguntas Frequentes
+          </span>
+          <h2 style={{ fontSize: "clamp(1.6rem, 3.5vw, 2.2rem)", fontWeight: 800, letterSpacing: "-0.03em", margin: "10px 0 0", color: "var(--text-primary)" }}>
+            Respostas para o CTO e o DPO
+          </h2>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column" as const, gap: 2 }}>
+          {FAQ_ITEMS.map((item, i) => (
+            <div key={i} style={{ backgroundColor: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+              <button
+                onClick={() => setOpen(open === i ? null : i)}
+                style={{
+                  width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "20px 24px", background: "none", border: "none", cursor: "pointer",
+                  textAlign: "left" as const, gap: 16,
+                }}
+              >
+                <span style={{ fontSize: "0.95rem", fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.4 }}>{item.q}</span>
+                <span style={{ fontSize: "1.2rem", color: "var(--accent)", flexShrink: 0, transform: open === i ? "rotate(45deg)" : "none", transition: "transform 0.2s" }}>+</span>
+              </button>
+              {open === i && (
+                <div style={{ padding: "0 24px 20px", fontSize: "0.88rem", color: "var(--text-secondary)", lineHeight: 1.7, borderTop: "1px solid var(--border)" }}>
+                  <p style={{ marginTop: 16 }}>{item.a}</p>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function LandingPage() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [scrolled, setScrolled] = useState(false);
@@ -786,6 +846,9 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+
+      {/* ── FAQ ─────────────────────────────────────────────────────────────── */}
+      <FaqSection />
 
       {/* ── CTA BANNER ─────────────────────────────────────────────────────── */}
       <section style={{ padding: "80px clamp(16px, 5vw, 80px)", backgroundColor: "var(--accent)" }}>
