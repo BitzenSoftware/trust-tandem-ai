@@ -128,35 +128,69 @@ def _call_claude(system: str, message: str) -> str:
 
 
 def _get_painel(tenant_id: str = Depends(_get_tenant_id)) -> PainelOrquestracao:
+    if tenant_id != "__admin__":
+        sub = repository.get_tenant_subscription(tenant_id)
+        if sub.get("status") == "expired":
+            raise HTTPException(
+                status_code=402,
+                detail="Trial de 15 dias expirado. Assine um plano para continuar.",
+            )
     return PainelOrquestracao(tenant_id=tenant_id)
 
 
-class _TenantRateLimiter:
-    """Sliding-window in-memory rate limiter per tenant_id."""
+# Max requests per 60s window, keyed by effective_plan
+_PLAN_RATE_LIMITS: dict[str, int] = {
+    "starter":      20,
+    "pro":          60,
+    "professional": 200,
+    "enterprise":   1000,
+}
+_RATE_WINDOW = 60
+_PLAN_CACHE_TTL = 300  # seconds — re-fetch plan at most every 5 min
 
-    def __init__(self, max_requests: int = 20, window_seconds: int = 60):
-        self._max = max_requests
-        self._window = window_seconds
+
+class _TenantRateLimiter:
+    """Sliding-window rate limiter per tenant, respecting per-plan limits."""
+
+    def __init__(self) -> None:
         self._buckets: dict[str, deque] = defaultdict(deque)
+        self._plan_cache: dict[str, tuple[str, float]] = {}
         self._lock = Lock()
 
-    def check(self, tenant_id: str) -> None:
+    def _resolve_plan(self, tenant_id: str) -> str:
         now = time.monotonic()
-        cutoff = now - self._window
+        with self._lock:
+            cached = self._plan_cache.get(tenant_id)
+            if cached and (now - cached[1]) < _PLAN_CACHE_TTL:
+                return cached[0]
+        try:
+            sub = repository.get_tenant_subscription(tenant_id)
+            plan = sub.get("effective_plan", "starter")
+        except Exception:
+            plan = "starter"
+        with self._lock:
+            self._plan_cache[tenant_id] = (plan, time.monotonic())
+        return plan
+
+    def check(self, tenant_id: str) -> None:
+        plan = self._resolve_plan(tenant_id)
+        max_req = _PLAN_RATE_LIMITS.get(plan, 20)
+        now = time.monotonic()
+        cutoff = now - _RATE_WINDOW
         with self._lock:
             dq = self._buckets[tenant_id]
             while dq and dq[0] < cutoff:
                 dq.popleft()
-            if len(dq) >= self._max:
+            if len(dq) >= max_req:
                 raise HTTPException(
                     status_code=429,
-                    detail=f"Rate limit: máximo {self._max} requisições por {self._window}s por tenant.",
-                    headers={"Retry-After": str(self._window)},
+                    detail=f"Rate limit: máximo {max_req} req/{_RATE_WINDOW}s (plano {plan}).",
+                    headers={"Retry-After": str(_RATE_WINDOW)},
                 )
             dq.append(now)
 
 
-_rate_limiter = _TenantRateLimiter(max_requests=20, window_seconds=60)
+_rate_limiter = _TenantRateLimiter()
 
 
 def _rate_limit(tenant_id: str = Depends(_get_tenant_id)) -> None:
@@ -225,6 +259,7 @@ class ClienteInput(BaseModel):
     name: str = Field(..., examples=["João Errado"])
     email: Optional[str] = Field(None, examples=["joao.silva.com"])
     cpf: Optional[str] = Field(None, examples=["123.ABC.789-XX"])
+    legal_basis: Optional[str] = Field(None, examples=["consentimento"], description="LGPD Art. 11 — base legal para tratamento (ex: consentimento, obrigação_legal)")
 
 
 class FieldSchemaIn(BaseModel):
@@ -234,6 +269,7 @@ class FieldSchemaIn(BaseModel):
     required: bool = True
     position: int = 0
     validation_rules: Optional[dict] = None
+    is_sensitive: bool = False
 
 
 class RespostaIngestao(BaseModel):
@@ -439,12 +475,17 @@ def resolver_registro(
         wh = repository.get_webhook(painel.tenant_id)
         if wh and wh.get("active"):
             repository.fire_webhook(wh["url"], wh["secret"], after_records[-1:])
+    original_legal_basis = original.get("extra_fields", {}).get("legal_basis") or cliente.legal_basis
     repository.create_audit_log(
         tenant_id=painel.tenant_id,
         operator_email=operator_email,
         record_name=cliente.name,
         action="APPROVE_MANUAL",
-        fields_affected={"email_provided": cliente.email is not None, "cpf_provided": cliente.cpf is not None},
+        fields_affected={
+            "email_provided": cliente.email is not None,
+            "cpf_provided": cliente.cpf is not None,
+            **({"legal_basis": original_legal_basis} if original_legal_basis else {}),
+        },
     )
     return RespostaIngestao(
         status="Resolvido",
@@ -504,12 +545,17 @@ def bulk_resolver(
             name=item.name, status="success",
             detail=f"email={merged['email']}" if item.email else f"cpf={merged['cpf']}"
         ))
+        item_legal_basis = (original.get("extra_fields") or {}).get("legal_basis")
         repository.create_audit_log(
             tenant_id=painel.tenant_id,
             operator_email=operator_email,
             record_name=item.name,
             action="APPROVE_BULK",
-            fields_affected={"email_provided": item.email is not None, "cpf_provided": item.cpf is not None},
+            fields_affected={
+                "email_provided": item.email is not None,
+                "cpf_provided": item.cpf is not None,
+                **({"legal_basis": item_legal_basis} if item_legal_basis else {}),
+            },
         )
 
     if approved_records and wh and wh.get("active"):
@@ -566,13 +612,16 @@ def remover_webhook(tenant_id: str = Depends(_get_tenant_id)):
 
 def _build_diagnosis_prompt(schema: list[dict]) -> str:
     fields_desc = "\n".join(
-        f"- {f['label']} (field_key: \"{f['field_key']}\", type: {f['field_type']})"
+        f"- {f['label']} (field_key: \"{f['field_key']}\", type: {f['field_type']}"
+        + (", DADO SENSÍVEL — valor não transmitido)" if f.get("is_sensitive") else ")")
         for f in schema
     )
     return (
         "Você é um especialista em validação de dados cadastrais.\n"
         "Analise o registro abaixo com base nos campos configurados pelo cliente:\n"
         f"{fields_desc}\n\n"
+        "IMPORTANTE: campos marcados como DADO SENSÍVEL não recebem o valor real — "
+        "não tente inferir ou sugerir valores para esses campos.\n\n"
         "Retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown:\n"
         "{\n"
         '  "campo_afetado": "<field_key do campo com problema>",\n'
@@ -592,8 +641,14 @@ def analisar_registro(name: str, painel: PainelOrquestracao = Depends(_get_paine
 
     schema = repository.get_tenant_schema(painel.tenant_id)
     extra = record.get("extra_fields") or {}
+
+    def _field_value(f: dict) -> str:
+        if f.get("is_sensitive"):
+            return "[DADO SENSÍVEL — omitido por segurança]"
+        return record.get(f["field_key"]) or extra.get(f["field_key"], "") or ""
+
     field_lines = "\n".join(
-        f"{f['label']}: {record.get(f['field_key']) or extra.get(f['field_key'], '')}"
+        f"{f['label']}: {_field_value(f)}"
         for f in schema
     )
     user_msg = (
@@ -757,6 +812,7 @@ def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
         "required":         body.required,
         "position":         body.position,
         "validation_rules": body.validation_rules or {},
+        "is_sensitive":     body.is_sensitive,
     })
     return repository.get_tenant_schema(tenant_id)
 
