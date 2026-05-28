@@ -144,6 +144,28 @@ def save(record: dict, tenant_id: str = "default") -> None:
         )
 
 
+def count_clean_records(tenant_id: str = "default") -> int:
+    """Returns exact total count of clean records for a tenant — single HTTP call, no pagination."""
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/clean_records",
+            params={"select": "id", "tenant_id": f"eq.{tenant_id}"},
+            headers={**_HEADERS, "Prefer": "count=exact"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        cr = resp.headers.get("Content-Range", "/0")
+        total = cr.split("/")[-1]
+        return int(total) if total.lstrip("-").isdigit() else len(resp.json())
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM clean_records WHERE tenant_id = ?", (tenant_id,)
+            ).fetchone()
+            return row[0] if row else 0
+    return 0
+
+
 def all_records(tenant_id: str = "default") -> list[dict]:
     if USE_SUPABASE:
         resp = _http.get(
