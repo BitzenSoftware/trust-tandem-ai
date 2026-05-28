@@ -289,6 +289,7 @@ class RegistroRevisaoOut(BaseModel):
     name: str
     email_hint: str
     cpf_hint: str
+    legal_basis: Optional[str] = None
 
 
 class DiagnosticoOut(BaseModel):
@@ -407,6 +408,7 @@ def listar_fila_revisao(painel: PainelOrquestracao = Depends(_get_painel)):
             name=item["name"],
             email_hint=_hint(str(item.get("email", ""))),
             cpf_hint=_hint(str(item.get("cpf", ""))),
+            legal_basis=item.get("legal_basis"),
         )
         for item in painel.fila_revisao
     ]
