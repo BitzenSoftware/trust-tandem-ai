@@ -568,7 +568,7 @@ export default function LandingPage() {
               { step: "01", icon: "📥", title: "Ingestão & Triagem", color: "var(--accent)", desc: "CSV com milhares de registros é importado. Validação de regras detecta emails malformados e CPFs inválidos automaticamente." },
               { step: "02", icon: "🧠", title: "Diagnóstico do Agente", color: "#8B5CF6", desc: 'O operador clica em "Solicitar Diagnóstico". O Agente retorna JSON estruturado com campo afetado e sugestão de correção.' },
               { step: "03", icon: "✅", title: "Validação Humana", color: "var(--success)", desc: "O operador revisa a sugestão, ajusta se necessário, e aprova com um clique — ou expurga o registro conforme Art. 18 LGPD." },
-              { step: "04", icon: "🔗", title: "Webhook de Saída", color: "var(--warning)", desc: "O registro limpo é enviado automaticamente via Webhook assíncrono para o CRM/ERP com assinatura HMAC-SHA256." },
+              { step: "04", icon: "🔗", title: "Webhook de Saída", color: "var(--warning)", desc: "O registro limpo é enviado via Webhook assíncrono com assinatura HMAC-SHA256 para qualquer destino." },
             ].map(item => (
               <div key={item.step} style={{
                 backgroundColor: "var(--bg-surface)", border: "1px solid var(--border)",
@@ -584,6 +584,25 @@ export default function LandingPage() {
                 <div style={{ fontSize: "1.8rem", marginBottom: 12 }}>{item.icon}</div>
                 <h3 style={{ fontSize: "0.92rem", fontWeight: 700, marginBottom: 8, color: item.color }}>{item.title}</h3>
                 <p style={{ fontSize: "0.8rem", lineHeight: 1.6, color: "var(--text-secondary)" }}>{item.desc}</p>
+                {item.step === "04" && (
+                  <div style={{ marginTop: 14 }}>
+                    <p style={{ fontSize: "0.65rem", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                      Compatível com
+                    </p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {["HubSpot", "Salesforce", "RD Station", "PostgreSQL", "BigQuery"].map(dest => (
+                        <span key={dest} style={{
+                          fontSize: "0.68rem", fontWeight: 600,
+                          padding: "3px 8px", borderRadius: 6,
+                          backgroundColor: "var(--bg-surface-2)", border: "1px solid var(--border)",
+                          color: "var(--text-secondary)",
+                        }}>
+                          {dest}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
