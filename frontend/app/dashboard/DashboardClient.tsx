@@ -142,6 +142,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [webhookLoading, setWebhookLoading] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [trialExpired,   setTrialExpired]   = useState(false);
+  const [dbTotal,        setDbTotal]        = useState<number | null>(null);
 
   // ── Queue pagination ─────────────────────────────────────────────────────
   const QUEUE_PAGE_SIZE = 50;
@@ -187,10 +188,11 @@ export default function DashboardClient({ token, userName }: { token: string; us
     finally { clearTimeout(wt); }
     // Now fetch data (server should be warm)
     try {
-      const [dbRes, qRes, profileRes] = await Promise.all([
-        apiFetch(`${API}/database`,      { headers: h }),
-        apiFetch(`${API}/review-queue`,  { headers: h }),
-        apiFetch(`${API}/admin/profile`, { headers: h }),
+      const [dbRes, qRes, profileRes, countRes] = await Promise.all([
+        apiFetch(`${API}/database`,        { headers: h }),
+        apiFetch(`${API}/review-queue`,    { headers: h }),
+        apiFetch(`${API}/admin/profile`,   { headers: h }),
+        apiFetch(`${API}/database/count`,  { headers: h }),
       ]);
       if (profileRes.ok) {
         const prof = await profileRes.json();
@@ -205,6 +207,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
       }
       else setError(`${t.dashboard.errApi} ${dbRes.status}.`);
       if (qRes.ok) setQueue(await qRes.json());
+      if (countRes.ok) { const c = await countRes.json(); setDbTotal(c.count ?? null); }
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError")
         setError(t.dashboard.errTimeout);
@@ -865,8 +868,9 @@ export default function DashboardClient({ token, userName }: { token: string; us
     finally { setIngestLoading(false); setIngestProgress(null); }
   }
 
-  const conformidade = db.length + queue.length > 0
-    ? ((db.length / (db.length + queue.length)) * 100).toFixed(1) : "100.0";
+  const totalClean = dbTotal ?? db.length;
+  const conformidade = totalClean + queue.length > 0
+    ? ((totalClean / (totalClean + queue.length)) * 100).toFixed(1) : "100.0";
 
   const s = {
     page:        { minHeight: "100vh", backgroundColor: "var(--bg-base)", color: "var(--text-primary)" },
@@ -1121,9 +1125,9 @@ export default function DashboardClient({ token, userName }: { token: string; us
             {/* Métricas */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 24 }}>
               {[
-                { label: t.dashboard.metricTotal,      value: db.length + queue.length, accent: false },
-                { label: t.dashboard.metricCompliance, value: `${conformidade}%`,        accent: true  },
-                { label: t.dashboard.metricSecure,     value: db.length,                accent: false },
+                { label: t.dashboard.metricTotal,      value: totalClean + queue.length, accent: false },
+                { label: t.dashboard.metricCompliance, value: `${conformidade}%`,         accent: true  },
+                { label: t.dashboard.metricSecure,     value: totalClean,                accent: false },
               ].map(({ label, value, accent }) => (
                 <div key={label} style={{ ...s.card, borderTop: accent ? "3px solid var(--accent)" : "3px solid var(--border)" }}>
                   <div style={s.metricLabel}>{label}</div>
