@@ -47,10 +47,15 @@ def init_db() -> None:
                 email        TEXT NOT NULL,
                 cpf          TEXT NOT NULL,
                 extra_fields TEXT DEFAULT '{}',
+                legal_basis  TEXT,
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 expires_at   TIMESTAMP DEFAULT (datetime('now', '+90 days'))
             )
         """)
+        try:
+            conn.execute("ALTER TABLE clean_records ADD COLUMN legal_basis TEXT")
+        except Exception:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS review_queue (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,9 +64,14 @@ def init_db() -> None:
                 email        TEXT,
                 cpf          TEXT,
                 extra_fields TEXT DEFAULT '{}',
+                legal_basis  TEXT,
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        try:
+            conn.execute("ALTER TABLE review_queue ADD COLUMN legal_basis TEXT")
+        except Exception:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tenant_field_schemas (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,20 +121,21 @@ def init_db() -> None:
 # --- clean_records ---
 
 def save(record: dict, tenant_id: str = "default") -> None:
-    extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf")}
+    legal_basis = record.get("legal_basis")
+    extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
     if USE_SUPABASE:
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/clean_records",
             json={"tenant_id": tenant_id, "name": record["name"], "email": record["email"],
-                  "cpf": record["cpf"], "extra_fields": extra or {}},
+                  "cpf": record["cpf"], "extra_fields": extra or {}, "legal_basis": legal_basis},
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
         return
     with sqlite3.connect(_DB_PATH) as conn:
         conn.execute(
-            "INSERT INTO clean_records (tenant_id, name, email, cpf, extra_fields) VALUES (?, ?, ?, ?, ?)",
-            (tenant_id, record["name"], record["email"], record["cpf"], json.dumps(extra)),
+            "INSERT INTO clean_records (tenant_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?)",
+            (tenant_id, record["name"], record["email"], record["cpf"], json.dumps(extra), legal_basis),
         )
 
 
@@ -257,20 +268,21 @@ def clear(tenant_id: str = "default") -> None:
 # --- review_queue ---
 
 def save_to_queue(record: dict, tenant_id: str = "default") -> None:
-    extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf")}
+    legal_basis = record.get("legal_basis")
+    extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
     if USE_SUPABASE:
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/review_queue",
             json={"tenant_id": tenant_id, "name": record["name"], "email": record.get("email"),
-                  "cpf": record.get("cpf"), "extra_fields": extra or {}},
+                  "cpf": record.get("cpf"), "extra_fields": extra or {}, "legal_basis": legal_basis},
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
         return
     with sqlite3.connect(_DB_PATH) as conn:
         conn.execute(
-            "INSERT INTO review_queue (tenant_id, name, email, cpf, extra_fields) VALUES (?, ?, ?, ?, ?)",
-            (tenant_id, record["name"], record.get("email"), record.get("cpf"), json.dumps(extra)),
+            "INSERT INTO review_queue (tenant_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?)",
+            (tenant_id, record["name"], record.get("email"), record.get("cpf"), json.dumps(extra), legal_basis),
         )
 
 
@@ -278,7 +290,7 @@ def get_queue(tenant_id: str = "default") -> list[dict]:
     if USE_SUPABASE:
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/review_queue",
-            params={"select": "name,email,cpf,extra_fields", "order": "id.asc", "tenant_id": f"eq.{tenant_id}"},
+            params={"select": "name,email,cpf,extra_fields,legal_basis", "order": "id.asc", "tenant_id": f"eq.{tenant_id}"},
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
@@ -287,7 +299,7 @@ def get_queue(tenant_id: str = "default") -> list[dict]:
     with sqlite3.connect(_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT name, email, cpf, extra_fields FROM review_queue WHERE tenant_id = ? ORDER BY id", (tenant_id,)
+            "SELECT name, email, cpf, extra_fields, legal_basis FROM review_queue WHERE tenant_id = ? ORDER BY id", (tenant_id,)
         ).fetchall()
         result = []
         for r in rows:
