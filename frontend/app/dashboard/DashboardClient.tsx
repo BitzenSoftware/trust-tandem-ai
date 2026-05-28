@@ -143,6 +143,10 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [trialExpired,   setTrialExpired]   = useState(false);
 
+  // ── Queue pagination ─────────────────────────────────────────────────────
+  const QUEUE_PAGE_SIZE = 25;
+  const [queuePage, setQueuePage] = useState(0);
+
   // ── Bulk approval state ──────────────────────────────────────────────────
   const [selectedNames,  setSelectedNames]  = useState<string[]>([]);
   const [bulkStep,       setBulkStep]       = useState<"idle" | "confirm" | "executing" | "completed">("idle");
@@ -603,7 +607,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
       });
       setDiagnoses(p => { const c = { ...p }; delete c[name]; return c; });
       setCorrections(p => { const c = { ...p }; delete c[name]; return c; });
-      setQueue(prev => prev.filter(q => q.name !== name));
+      setQueue(prev => {
+        const next = prev.filter(q => q.name !== name);
+        const maxPage = Math.max(0, Math.ceil(next.length / QUEUE_PAGE_SIZE) - 1);
+        setQueuePage(p => Math.min(p, maxPage));
+        return next;
+      });
       fetchData();
     } catch { /* user can retry */ }
     finally { setApproveLoading(p => ({ ...p, [name]: false })); }
@@ -729,7 +738,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
           (report.details as { name: string; status: string }[])
             .filter(d => d.status === "success").map(d => d.name)
         );
-        setQueue(prev => prev.filter(q => !approvedNames.has(q.name)));
+        setQueue(prev => {
+          const next = prev.filter(q => !approvedNames.has(q.name));
+          const maxPage = Math.max(0, Math.ceil(next.length / QUEUE_PAGE_SIZE) - 1);
+          setQueuePage(p => Math.min(p, maxPage));
+          return next;
+        });
         approvedNames.forEach(name => {
           setDiagnoses(p => { const c = { ...p }; delete c[name]; return c; });
           setCorrections(p => { const c = { ...p }; delete c[name]; return c; });
@@ -1182,8 +1196,28 @@ export default function DashboardClient({ token, userName }: { token: string; us
                 )}
               </div>
 
-              {queue.map((item, i) => (
-              <div key={i} style={{ ...s.alertCard, outline: selectedNames.includes(item.name) ? "2px solid var(--accent)" : "2px solid transparent", transition: "outline 0.15s" }}>
+              {/* Pagination info */}
+              {queue.length > QUEUE_PAGE_SIZE && (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 2px" }}>
+                  <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                    Página {queuePage + 1} de {Math.ceil(queue.length / QUEUE_PAGE_SIZE)} — {queue.length} registros na fila
+                  </span>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      onClick={() => setQueuePage(p => Math.max(0, p - 1))}
+                      disabled={queuePage === 0}
+                      style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", cursor: queuePage === 0 ? "not-allowed" : "pointer", opacity: queuePage === 0 ? 0.4 : 1, fontSize: "0.8rem" }}
+                    >← Anterior</button>
+                    <button
+                      onClick={() => setQueuePage(p => Math.min(Math.ceil(queue.length / QUEUE_PAGE_SIZE) - 1, p + 1))}
+                      disabled={queuePage >= Math.ceil(queue.length / QUEUE_PAGE_SIZE) - 1}
+                      style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", cursor: queuePage >= Math.ceil(queue.length / QUEUE_PAGE_SIZE) - 1 ? "not-allowed" : "pointer", opacity: queuePage >= Math.ceil(queue.length / QUEUE_PAGE_SIZE) - 1 ? 0.4 : 1, fontSize: "0.8rem" }}>Próxima →</button>
+                  </div>
+                </div>
+              )}
+
+              {queue.slice(queuePage * QUEUE_PAGE_SIZE, (queuePage + 1) * QUEUE_PAGE_SIZE).map((item, i) => (
+              <div key={item.name} style={{ ...s.alertCard, outline: selectedNames.includes(item.name) ? "2px solid var(--accent)" : "2px solid transparent", transition: "outline 0.15s" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
                     <input
