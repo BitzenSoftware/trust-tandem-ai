@@ -9,7 +9,8 @@ import Papa from "papaparse";
 const API = process.env.NEXT_PUBLIC_API_URL + "/api/v1";
 
 type CleanRecord    = { name: string; email: string; cpf: string };
-type QueueItem      = { name: string; email_hint: string; cpf_hint: string };
+type QueueItem      = { name: string; email_hint: string; cpf_hint: string; legal_basis?: string | null };
+type AuditLogEntry  = { id: number; operator_email: string; record_name: string; action: string; fields_affected: string | Record<string, unknown>; created_at: string };
 type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown>; is_sensitive: boolean };
 type PlanInfo       = { plan: string; field_limit: number; field_count: number };
 type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null };
@@ -126,6 +127,8 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [newEntClient,  setNewEntClient]  = useState({ tenant_id: "", stripe_price_id: "", amount_display: "", currency_display: "BRL" });
   const [entClientSaving, setEntClientSaving] = useState(false);
   const [tenantOptions,   setTenantOptions]   = useState<TenantOption[]>([]);
+  const [auditLogs,       setAuditLogs]       = useState<AuditLogEntry[]>([]);
+  const [auditLogsLoaded, setAuditLogsLoaded] = useState(false);
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [csvMapStep,    setCsvMapStep]    = useState<"upload" | "map" | "ready">("upload");
   const [apiKeys,       setApiKeys]       = useState<{ id: number; label: string | null; created_at: string }[]>([]);
@@ -409,6 +412,16 @@ export default function DashboardClient({ token, userName }: { token: string; us
     } catch { setStripeSyncError("Erro de conexão ao tentar sincronizar."); }
     finally { setSyncingStripe(false); }
   }
+
+  const fetchAuditLogs = useCallback(async () => {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    try {
+      const res = await apiFetch(`${API}/audit-logs?limit=100`, { headers: h });
+      if (res.ok) setAuditLogs(await res.json());
+    } catch { /* ignore */ }
+    finally { setAuditLogsLoaded(true); }
+  }, []);
 
   const fetchSubscription = useCallback(async () => {
     const h = await getFreshHeaders();
@@ -1008,7 +1021,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
             <button onClick={() => { setTab("schema"); if (!schemaLoaded) fetchSchema(); }} style={tab === "schema" ? s.tabActive : s.tabInactive}>
               {t.schema.tab}
             </button>
-            <button onClick={() => setTab("audit")} style={tab === "audit" ? s.tabActive : s.tabInactive}>
+            <button onClick={() => { setTab("audit"); if (!auditLogsLoaded) fetchAuditLogs(); }} style={tab === "audit" ? s.tabActive : s.tabInactive}>
               {t.audit.tab}
             </button>
             <button onClick={() => setTab("subscription")} style={tab === "subscription" ? s.tabActive : s.tabInactive}>
@@ -1186,7 +1199,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
                   </div>
                   <button onClick={() => handleExpurge(item.name)} style={s.expurgeBtn}>{t.dashboard.expurgeBtn}</button>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: item.legal_basis ? 8 : 12 }}>
                   <div style={s.hintBox}>
                     <div style={s.hintLabel}>{t.dashboard.emailHint}</div>
                     <div style={s.hintValue}>{item.email_hint}</div>
@@ -1196,6 +1209,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
                     <div style={s.hintValue}>{item.cpf_hint}</div>
                   </div>
                 </div>
+                {item.legal_basis && (
+                  <div style={{ marginBottom: 12, padding: "6px 10px", backgroundColor: "var(--bg-base)", border: "1px solid var(--border)", borderRadius: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: "0.68rem", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>Base Legal (LGPD)</span>
+                    <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--accent)" }}>{item.legal_basis}</span>
+                  </div>
+                )}
                 {diagnoses[item.name] ? (
                   <div>
                     <div style={s.diagnoseBox}>
@@ -1582,6 +1601,55 @@ export default function DashboardClient({ token, userName }: { token: string; us
                 <span style={s.auditBadgePurple}>{t.audit.cryptoBadge2}</span>
                 <span style={s.auditBadgePurple}>{t.audit.cryptoBadge3}</span>
               </div>
+            </div>
+
+            {/* Card 4 — Audit Log */}
+            <div style={{ ...s.auditCardBlue, marginTop: 8 }}>
+              <div style={s.auditCardRow}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={s.auditIconBlue}>📋</div>
+                  <div>
+                    <p style={s.auditCardTitle}>Log de Auditoria</p>
+                    <p style={s.auditCardSub}>Histórico de aprovações e expurgos — LGPD Art. 37</p>
+                  </div>
+                </div>
+                <button onClick={fetchAuditLogs} style={{ fontSize: "0.72rem", padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", cursor: "pointer" }}>
+                  Atualizar
+                </button>
+              </div>
+              {!auditLogsLoaded ? (
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 12 }}>Carregando...</p>
+              ) : auditLogs.length === 0 ? (
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 12 }}>Nenhuma ação registrada ainda.</p>
+              ) : (
+                <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {auditLogs.map(log => {
+                    const fields = typeof log.fields_affected === "string" ? (() => { try { return JSON.parse(log.fields_affected as string); } catch { return {}; } })() : (log.fields_affected ?? {});
+                    const legalBasis = (fields as Record<string, unknown>).legal_basis as string | undefined;
+                    return (
+                      <div key={log.id} style={{ padding: "8px 12px", backgroundColor: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 3 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <span style={{ fontSize: "0.68rem", fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: log.action.startsWith("APPROVE") ? "#dcfce7" : "#fee2e2", color: log.action.startsWith("APPROVE") ? "#15803d" : "#b91c1c" }}>
+                              {log.action}
+                            </span>
+                            <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-primary)" }}>{log.record_name}</span>
+                          </div>
+                          <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>{new Date(log.created_at).toLocaleString("pt-BR")}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" as const }}>
+                          <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>{log.operator_email}</span>
+                          {legalBasis && (
+                            <span style={{ fontSize: "0.68rem", fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "var(--bg-base)", border: "1px solid var(--border)", color: "var(--accent)" }}>
+                              Base legal: {legalBasis}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         ) : tab === "subscription" ? (
