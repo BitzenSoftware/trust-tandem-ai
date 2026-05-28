@@ -58,3 +58,6 @@ ntuser.ini
 *.log
 .DS_Store
 Thumbs.db
+
+# Local test scripts (contêm credenciais)
+test_integration.ps1
