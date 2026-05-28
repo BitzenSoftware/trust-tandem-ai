@@ -99,7 +99,7 @@ function CheckIcon({ color = "var(--success)" }: { color?: string }) {
 
 const W: React.CSSProperties = { maxWidth: 1200, margin: "0 auto", width: "100%" };
 
-const PLAN_ORDER: Record<string, number> = { starter: 0, pro: 1, enterprise: 2 };
+const PLAN_ORDER: Record<string, number> = { starter: 0, pro: 1, professional: 2, enterprise: 3 };
 
 const PLAN_META: Record<string, { displayName: string; desc: string; highlight: boolean; cta: string; ctaHref: string; features: string[] }> = {
   starter: {
@@ -111,8 +111,14 @@ const PLAN_META: Record<string, { displayName: string; desc: string; highlight: 
   pro: {
     displayName: "Business",
     desc: "Para PMEs e startups estruturadas que processam bases de clientes de forma recorrente.",
-    highlight: true, cta: "Agendar Demonstração", ctaHref: "/register",
+    highlight: false, cta: "Começar Agora", ctaHref: "/register",
     features: ["Até 50.000 registros/mês", "Chunking automático de CSV", "Diagnósticos do Agente ilimitados", "Webhooks ilimitados com HMAC-SHA256", "5 API Keys por tenant", "SLA 99,5% de uptime"],
+  },
+  professional: {
+    displayName: "Professional",
+    desc: "Para fintechs, seguradoras e mid-market com alto volume de registros recorrentes.",
+    highlight: true, cta: "Agendar Demonstração", ctaHref: "/register",
+    features: ["Até 200.000 registros/mês", "Diagnósticos do Agente ilimitados", "Webhooks ilimitados com HMAC-SHA256", "20 API Keys por tenant", "Suporte prioritário por e-mail", "SLA 99,9% de uptime"],
   },
   enterprise: {
     displayName: "Enterprise",
