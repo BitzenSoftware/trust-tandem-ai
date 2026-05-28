@@ -114,6 +114,46 @@ class PainelOrquestracao:
             repository.save_to_queue(cliente, self.tenant_id)
             logger.warning("Registro de '%s' enviado para Fila de Revisão Humana.", cliente["name"])
 
+    def processar_lote(self, clientes: list[dict], schema: list[dict] | None = None) -> tuple[int, int]:
+        """Classify all records first, then bulk-insert — reduces N HTTP calls to 2."""
+        if schema is None:
+            schema = repository.get_tenant_schema(self.tenant_id)
+
+        valid_records: list[dict] = []
+        invalid_records: list[dict] = []
+
+        for cliente in clientes:
+            if not cliente.get("name") or not str(cliente["name"]).strip():
+                invalid_records.append(cliente)
+                logger.warning("Registro sem nome válido enviado para Fila de Revisão Humana.")
+                continue
+
+            all_valid = all(
+                _validate_by_type(
+                    cliente.get(f["field_key"]),
+                    f["field_type"],
+                    f.get("validation_rules") or {},
+                )
+                for f in schema
+                if f.get("required", True)
+            )
+
+            if all_valid:
+                valid_records.append({
+                    "name": cliente["name"],
+                    "email": cliente.get("email") or "",
+                    "cpf": cliente.get("cpf") or "",
+                    **{k: v for k, v in cliente.items() if k not in ("name", "email", "cpf")},
+                })
+            else:
+                invalid_records.append(cliente)
+                logger.warning("Registro de '%s' enviado para Fila de Revisão Humana.", cliente["name"])
+
+        repository.save_bulk(valid_records, self.tenant_id)
+        repository.save_to_queue_bulk(invalid_records, self.tenant_id)
+
+        return len(valid_records), len(invalid_records)
+
     def remover_da_fila(self, name: str) -> int:
         return repository.remove_from_queue(name, self.tenant_id)
 
