@@ -144,7 +144,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [trialExpired,   setTrialExpired]   = useState(false);
 
   // ── Queue pagination ─────────────────────────────────────────────────────
-  const QUEUE_PAGE_SIZE = 25;
+  const QUEUE_PAGE_SIZE = 50;
   const [queuePage, setQueuePage] = useState(0);
 
   // ── Bulk approval state ──────────────────────────────────────────────────
