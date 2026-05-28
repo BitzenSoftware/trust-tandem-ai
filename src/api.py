@@ -430,6 +430,11 @@ def visualizar_banco_seguro(
     return JSONResponse(content=masked, headers=headers)
 
 
+@_router.get("/database/count", summary="Retorna contagem total de registros limpos do tenant")
+def contar_banco(painel: PainelOrquestracao = Depends(_get_painel)):
+    return {"count": repository.count_clean_records(painel.tenant_id)}
+
+
 @_router.get("/database/export", summary="Exporta todos os dados limpos como CSV")
 def exportar_csv(painel: PainelOrquestracao = Depends(_get_painel)):
     import csv
