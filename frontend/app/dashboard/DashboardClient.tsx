@@ -10,7 +10,7 @@ const API = process.env.NEXT_PUBLIC_API_URL + "/api/v1";
 
 type CleanRecord    = { name: string; email: string; cpf: string };
 type QueueItem      = { name: string; email_hint: string; cpf_hint: string };
-type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown> };
+type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown>; is_sensitive: boolean };
 type PlanInfo       = { plan: string; field_limit: number; field_count: number };
 type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null };
 type EnterpriseConfig  = { tenant_id: string; stripe_price_id: string; amount_display: number; currency_display: string };
@@ -95,7 +95,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [formRecord,    setFormRecord]    = useState<Record<string, string>>({ name: "", email: "", cpf: "" });
   const [schema,        setSchema]        = useState<FieldSchema[]>([]);
   const [schemaLoaded,  setSchemaLoaded]  = useState(false);
-  const [newField,      setNewField]      = useState({ field_key: "", label: "", field_type: "text", required: true, position: 0 });
+  const [newField,      setNewField]      = useState({ field_key: "", label: "", field_type: "text", required: true, position: 0, is_sensitive: false });
   const [schemaLoading, setSchemaLoading] = useState(false);
   const [planInfo,      setPlanInfo]      = useState<PlanInfo | null>(null);
   const [addFieldError, setAddFieldError] = useState("");
@@ -264,7 +264,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
       });
       if (res.ok) {
         setSchema(await res.json());
-        setNewField({ field_key: "", label: "", field_type: "text", required: true, position: 0 });
+        setNewField({ field_key: "", label: "", field_type: "text", required: true, position: 0, is_sensitive: false });
         // Refresh plan count after successful add
         const planRes = await apiFetch(`${API}/plan`, { headers: h });
         if (planRes.ok) setPlanInfo(await planRes.json());
@@ -770,8 +770,8 @@ export default function DashboardClient({ token, userName }: { token: string; us
         setIngestError("");
         // Build initial mapping (auto-match by field_key / label)
         const currentSchema = schema.length > 0 ? schema : [
-          { field_key: "email", label: "E-mail",   field_type: "email", required: true, position: 1, validation_rules: {} },
-          { field_key: "cpf",   label: "CPF/CNPJ", field_type: "cpf",   required: true, position: 2, validation_rules: {} },
+          { field_key: "email", label: "E-mail",   field_type: "email", required: true, position: 1, validation_rules: {}, is_sensitive: false },
+          { field_key: "cpf",   label: "CPF/CNPJ", field_type: "cpf",   required: true, position: 2, validation_rules: {}, is_sensitive: false },
         ];
         const mapping = autoMapColumns(columns, currentSchema);
         setColumnMapping(mapping);
@@ -1437,7 +1437,10 @@ export default function DashboardClient({ token, userName }: { token: string; us
                 {schema.map(f => (
                   <div key={f.field_key} style={s.keyRow}>
                     <div>
-                      <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>{f.field_key} <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>— {f.label}</span></p>
+                      <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                        {f.field_key} <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>— {f.label}</span>
+                        {f.is_sensitive && <span style={{ marginLeft: 8, fontSize: "0.68rem", fontWeight: 600, color: "#b91c1c", background: "#fee2e2", borderRadius: 4, padding: "1px 6px" }}>🔒 Sensível</span>}
+                      </p>
                       <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{f.field_type} · {f.required ? t.schema.required : "opcional"} · {t.schema.position}: {f.position}</p>
                     </div>
                     <button onClick={() => handleDeleteField(f.field_key)} style={s.revokeBtn}>{t.schema.deleteField}</button>
@@ -1484,6 +1487,13 @@ export default function DashboardClient({ token, userName }: { token: string; us
                       {t.schema.required}
                     </label>
                   </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: "0.82rem", color: newField.is_sensitive ? "#b91c1c" : "var(--text-secondary)" }}>
+                    <input type="checkbox" checked={newField.is_sensitive} style={{ accentColor: "#b91c1c", width: 16, height: 16 }}
+                      onChange={e => setNewField(p => ({ ...p, is_sensitive: e.target.checked }))} />
+                    🔒 Dado Sensível (LGPD Art. 11) — valor não será enviado à IA
+                  </label>
                 </div>
                 {addFieldError && (
                   <p style={{ fontSize: "0.78rem", color: "var(--error-text, #b91c1c)", margin: "4px 0 0" }}>{addFieldError}</p>
