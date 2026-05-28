@@ -593,18 +593,21 @@ def get_tenant_schema(tenant_id: str) -> list[dict]:
     if USE_SUPABASE:
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
-            params={"select": "field_key,label,field_type,required,position,validation_rules",
+            params={"select": "field_key,label,field_type,required,position,validation_rules,is_sensitive",
                     "tenant_id": f"eq.{tenant_id}", "order": "position.asc"},
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
         rows = resp.json()
+        for r in rows:
+            r.setdefault("is_sensitive", False)
         return _merge_with_defaults(rows)
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT field_key, label, field_type, required, position, validation_rules"
+                "SELECT field_key, label, field_type, required, position, validation_rules,"
+                " COALESCE(is_sensitive, 0) as is_sensitive"
                 " FROM tenant_field_schemas WHERE tenant_id = ? ORDER BY position",
                 (tenant_id,)
             ).fetchall()
@@ -616,6 +619,7 @@ def get_tenant_schema(tenant_id: str) -> list[dict]:
                 except Exception:
                     d["validation_rules"] = {}
                 d["required"] = bool(d["required"])
+                d["is_sensitive"] = bool(d.get("is_sensitive", False))
                 custom.append(d)
             return _merge_with_defaults(custom)
     return list(_DEFAULT_SCHEMA)
@@ -625,7 +629,7 @@ def upsert_field_schema(tenant_id: str, field: dict) -> None:
     if USE_SUPABASE:
         _http.post(
             f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
-            json={"tenant_id": tenant_id, **field},
+            json={"tenant_id": tenant_id, **field, "is_sensitive": bool(field.get("is_sensitive", False))},
             headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
             params={"on_conflict": "tenant_id,field_key"}, timeout=10,
         ).raise_for_status()
@@ -633,14 +637,17 @@ def upsert_field_schema(tenant_id: str, field: dict) -> None:
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(_DB_PATH) as conn:
         conn.execute(
-            "INSERT INTO tenant_field_schemas (tenant_id, field_key, label, field_type, required, position, validation_rules)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO tenant_field_schemas"
+            " (tenant_id, field_key, label, field_type, required, position, validation_rules, is_sensitive)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(tenant_id, field_key) DO UPDATE SET"
             " label=excluded.label, field_type=excluded.field_type, required=excluded.required,"
-            " position=excluded.position, validation_rules=excluded.validation_rules",
+            " position=excluded.position, validation_rules=excluded.validation_rules,"
+            " is_sensitive=excluded.is_sensitive",
             (tenant_id, field["field_key"], field["label"], field["field_type"],
              1 if field.get("required", True) else 0, field.get("position", 0),
-             json.dumps(field.get("validation_rules", {}))),
+             json.dumps(field.get("validation_rules", {})),
+             1 if field.get("is_sensitive", False) else 0),
         )
 
 
