@@ -389,14 +389,15 @@ def _get_stripe_key() -> str:
 def ingerir_dados(clientes: list[ClienteInput], painel: PainelOrquestracao = Depends(_get_painel)):
     if not clientes:
         raise HTTPException(status_code=400, detail="A lista de clientes não pode estar vazia.")
-    schema = repository.get_tenant_schema(painel.tenant_id)  # fetch once per batch
-    for cliente in clientes:
-        painel.processar_registro(cliente.model_dump(), schema=schema)
+    schema = repository.get_tenant_schema(painel.tenant_id)
+    clean_count, queue_count = painel.processar_lote(
+        [c.model_dump() for c in clientes], schema=schema
+    )
     return RespostaIngestao(
         status="Processado",
         mensagem="Lote avaliado pela IA de Compliance.",
-        registros_banco_limpo=len(painel.banco_limpo),
-        registros_fila_revisao=len(painel.fila_revisao),
+        registros_banco_limpo=clean_count,
+        registros_fila_revisao=queue_count,
     )
 
 
