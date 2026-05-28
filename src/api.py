@@ -475,7 +475,7 @@ def resolver_registro(
         wh = repository.get_webhook(painel.tenant_id)
         if wh and wh.get("active"):
             repository.fire_webhook(wh["url"], wh["secret"], after_records[-1:])
-    original_legal_basis = original.get("extra_fields", {}).get("legal_basis") or cliente.legal_basis
+    original_legal_basis = original.get("legal_basis") or cliente.legal_basis
     repository.create_audit_log(
         tenant_id=painel.tenant_id,
         operator_email=operator_email,
@@ -545,7 +545,7 @@ def bulk_resolver(
             name=item.name, status="success",
             detail=f"email={merged['email']}" if item.email else f"cpf={merged['cpf']}"
         ))
-        item_legal_basis = (original.get("extra_fields") or {}).get("legal_basis")
+        item_legal_basis = original.get("legal_basis")
         repository.create_audit_log(
             tenant_id=painel.tenant_id,
             operator_email=operator_email,
