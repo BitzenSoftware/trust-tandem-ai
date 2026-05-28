@@ -109,8 +109,8 @@ const PLAN_META: Record<string, { displayName: string; desc: string; highlight: 
     features: ["15 dias de acesso completo", "Upload CSV e formulário manual", "Diagnósticos do Agente incluídos", "1 Webhook de saída", "1 API Key por tenant", "Sem cartão de crédito"],
   },
   pro: {
-    displayName: "Pro",
-    desc: "Para mid-market que processa bases de dados de clientes de forma recorrente.",
+    displayName: "Business",
+    desc: "Para PMEs e startups estruturadas que processam bases de clientes de forma recorrente.",
     highlight: true, cta: "Agendar Demonstração", ctaHref: "/register",
     features: ["Até 50.000 registros/mês", "Chunking automático de CSV", "Diagnósticos do Agente ilimitados", "Webhooks ilimitados com HMAC-SHA256", "5 API Keys por tenant", "SLA 99,5% de uptime"],
   },
