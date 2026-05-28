@@ -195,6 +195,51 @@ def get_clean_records_paginated(
         return [{"name": r["name"], "email": r["email"], "cpf": r["cpf"]} for r in page], next_cursor
 
 
+def iter_clean_records_for_export(tenant_id: str, page_size: int = 500):
+    """Generator that yields rows for CSV export, streaming page-by-page to avoid memory spikes."""
+    after_id = None
+    while True:
+        if USE_SUPABASE:
+            params: dict = {
+                "select": "id,name,email,cpf,created_at",
+                "order": "id.asc",
+                "tenant_id": f"eq.{tenant_id}",
+                "limit": page_size,
+            }
+            if after_id is not None:
+                params["id"] = f"gt.{after_id}"
+            resp = _http.get(
+                f"{_SUPABASE_URL}/rest/v1/clean_records",
+                params=params, headers=_HEADERS, timeout=30,
+            )
+            resp.raise_for_status()
+            rows = resp.json()
+        else:
+            with sqlite3.connect(_DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                if after_id is not None:
+                    rows = [dict(r) for r in conn.execute(
+                        "SELECT id, name, email, cpf, created_at FROM clean_records "
+                        "WHERE tenant_id = ? AND id > ? ORDER BY id LIMIT ?",
+                        (tenant_id, after_id, page_size),
+                    ).fetchall()]
+                else:
+                    rows = [dict(r) for r in conn.execute(
+                        "SELECT id, name, email, cpf, created_at FROM clean_records "
+                        "WHERE tenant_id = ? ORDER BY id LIMIT ?",
+                        (tenant_id, page_size),
+                    ).fetchall()]
+
+        if not rows:
+            return
+        for row in rows:
+            yield {"name": row["name"], "email": row["email"], "cpf": row["cpf"],
+                   "created_at": row.get("created_at") or ""}
+        after_id = rows[-1]["id"]
+        if len(rows) < page_size:
+            return  # last page reached
+
+
 def clear(tenant_id: str = "default") -> None:
     if USE_SUPABASE:
         resp = _http.delete(
@@ -529,9 +574,10 @@ _DEFAULT_SCHEMA: list[dict] = [
 ]
 
 PLAN_LIMITS: dict[str, int] = {
-    "starter":    5,
-    "pro":        15,
-    "enterprise": 999,
+    "starter":      5,
+    "pro":          15,
+    "professional": 20,
+    "enterprise":   999,
 }
 
 
@@ -642,7 +688,7 @@ def ensure_trial_and_upsert(tenant_id: str, company_name: str | None = None) -> 
         )
         resp.raise_for_status()
         rows = resp.json()
-        trial_ends = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        trial_ends = (datetime.now(timezone.utc) + timedelta(days=15)).isoformat()
         if not rows:
             payload: dict = {
                 "id": tenant_id, "plan": "starter",
@@ -820,9 +866,10 @@ def delete_field_schema(tenant_id: str, field_key: str) -> int:
 
 def get_plan_configs() -> list[dict]:
     defaults = [
-        {"plan_name": "starter",    "field_limit": PLAN_LIMITS["starter"],    "price_monthly": 0.0,  "stripe_price_id": None},
-        {"plan_name": "pro",        "field_limit": PLAN_LIMITS["pro"],        "price_monthly": 49.0, "stripe_price_id": None},
-        {"plan_name": "enterprise", "field_limit": PLAN_LIMITS["enterprise"], "price_monthly": 199.0,"stripe_price_id": None},
+        {"plan_name": "starter",      "field_limit": PLAN_LIMITS["starter"],      "price_monthly": 0.0,    "stripe_price_id": None},
+        {"plan_name": "pro",          "field_limit": PLAN_LIMITS["pro"],          "price_monthly": 497.0,  "stripe_price_id": None},
+        {"plan_name": "professional", "field_limit": PLAN_LIMITS["professional"], "price_monthly": 1490.0, "stripe_price_id": None},
+        {"plan_name": "enterprise",   "field_limit": PLAN_LIMITS["enterprise"],   "price_monthly": 0.0,    "stripe_price_id": None},
     ]
     if USE_SUPABASE:
         resp = _http.get(
