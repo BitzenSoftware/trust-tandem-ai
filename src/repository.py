@@ -291,6 +291,66 @@ def save_to_queue(record: dict, tenant_id: str = "default") -> None:
         )
 
 
+def save_bulk(records: list[dict], tenant_id: str = "default") -> None:
+    """Bulk-insert into clean_records — one HTTP call regardless of record count."""
+    if not records:
+        return
+    if USE_SUPABASE:
+        payload = []
+        for record in records:
+            legal_basis = record.get("legal_basis")
+            extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
+            payload.append({
+                "tenant_id": tenant_id, "name": record["name"],
+                "email": record["email"], "cpf": record["cpf"],
+                "extra_fields": extra or {}, "legal_basis": legal_basis,
+            })
+        resp = _http.post(
+            f"{_SUPABASE_URL}/rest/v1/clean_records",
+            json=payload, headers=_HEADERS, timeout=30,
+        )
+        resp.raise_for_status()
+        return
+    with sqlite3.connect(_DB_PATH) as conn:
+        for record in records:
+            legal_basis = record.get("legal_basis")
+            extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
+            conn.execute(
+                "INSERT INTO clean_records (tenant_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?)",
+                (tenant_id, record["name"], record["email"], record["cpf"], json.dumps(extra), legal_basis),
+            )
+
+
+def save_to_queue_bulk(records: list[dict], tenant_id: str = "default") -> None:
+    """Bulk-insert into review_queue — one HTTP call regardless of record count."""
+    if not records:
+        return
+    if USE_SUPABASE:
+        payload = []
+        for record in records:
+            legal_basis = record.get("legal_basis")
+            extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
+            payload.append({
+                "tenant_id": tenant_id, "name": record["name"],
+                "email": record.get("email"), "cpf": record.get("cpf"),
+                "extra_fields": extra or {}, "legal_basis": legal_basis,
+            })
+        resp = _http.post(
+            f"{_SUPABASE_URL}/rest/v1/review_queue",
+            json=payload, headers=_HEADERS, timeout=30,
+        )
+        resp.raise_for_status()
+        return
+    with sqlite3.connect(_DB_PATH) as conn:
+        for record in records:
+            legal_basis = record.get("legal_basis")
+            extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
+            conn.execute(
+                "INSERT INTO review_queue (tenant_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?)",
+                (tenant_id, record["name"], record.get("email"), record.get("cpf"), json.dumps(extra), legal_basis),
+            )
+
+
 def get_queue(tenant_id: str = "default") -> list[dict]:
     if USE_SUPABASE:
         resp = _http.get(
