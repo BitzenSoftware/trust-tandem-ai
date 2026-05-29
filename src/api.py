@@ -504,8 +504,7 @@ def resolver_registro(
 
 
 @_router.post("/bulk-resolve", response_model=BulkResolveReport,
-              summary="Resolve em lote registros da fila — único round-trip HTTP, N operações DB",
-              dependencies=[Depends(_rate_limit)])
+              summary="Resolve em lote registros da fila — único round-trip HTTP, N operações DB")
 def bulk_resolver(
     payload: BulkResolveInput,
     painel: PainelOrquestracao = Depends(_get_painel),
