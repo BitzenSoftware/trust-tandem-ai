@@ -58,20 +58,33 @@ def init_db() -> None:
             pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS review_queue (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                tenant_id    TEXT NOT NULL DEFAULT 'default',
-                name         TEXT NOT NULL,
-                email        TEXT,
-                cpf          TEXT,
-                extra_fields TEXT DEFAULT '{}',
-                legal_basis  TEXT,
-                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id            TEXT NOT NULL DEFAULT 'default',
+                name                 TEXT NOT NULL,
+                email                TEXT,
+                cpf                  TEXT,
+                extra_fields         TEXT DEFAULT '{}',
+                legal_basis          TEXT,
+                status               TEXT DEFAULT 'PENDING',
+                operator_approved_by TEXT,
+                operator_approved_at TIMESTAMP,
+                admin_approved_by    TEXT,
+                admin_approved_at    TIMESTAMP,
+                created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        try:
-            conn.execute("ALTER TABLE review_queue ADD COLUMN legal_basis TEXT")
-        except Exception:
-            pass
+        for _col in [
+            "ALTER TABLE review_queue ADD COLUMN legal_basis TEXT",
+            "ALTER TABLE review_queue ADD COLUMN status TEXT DEFAULT 'PENDING'",
+            "ALTER TABLE review_queue ADD COLUMN operator_approved_by TEXT",
+            "ALTER TABLE review_queue ADD COLUMN operator_approved_at TIMESTAMP",
+            "ALTER TABLE review_queue ADD COLUMN admin_approved_by TEXT",
+            "ALTER TABLE review_queue ADD COLUMN admin_approved_at TIMESTAMP",
+        ]:
+            try:
+                conn.execute(_col)
+            except Exception:
+                pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tenant_field_schemas (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -312,7 +325,8 @@ def save_to_queue(record: dict, tenant_id: str = "default") -> None:
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/review_queue",
             json={"tenant_id": tenant_id, "name": record["name"], "email": record.get("email"),
-                  "cpf": record.get("cpf"), "extra_fields": extra or {}, "legal_basis": legal_basis},
+                  "cpf": record.get("cpf"), "extra_fields": extra or {}, "legal_basis": legal_basis,
+                  "status": "PENDING"},
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
@@ -367,6 +381,7 @@ def save_to_queue_bulk(records: list[dict], tenant_id: str = "default") -> None:
                 "tenant_id": tenant_id, "name": record["name"],
                 "email": record.get("email"), "cpf": record.get("cpf"),
                 "extra_fields": extra or {}, "legal_basis": legal_basis,
+                "status": "PENDING",
             })
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/review_queue",
@@ -384,21 +399,41 @@ def save_to_queue_bulk(records: list[dict], tenant_id: str = "default") -> None:
             )
 
 
-def get_queue(tenant_id: str = "default") -> list[dict]:
+def get_queue(tenant_id: str = "default", status: str = "PENDING") -> list[dict]:
     if USE_SUPABASE:
-        resp = _http.get(
-            f"{_SUPABASE_URL}/rest/v1/review_queue",
-            params={"select": "name,email,cpf,extra_fields,legal_basis", "order": "id.asc", "tenant_id": f"eq.{tenant_id}"},
-            headers=_HEADERS, timeout=10,
-        )
+        params: dict = {
+            "select": "name,email,cpf,extra_fields,legal_basis,status,operator_approved_by",
+            "order": "id.asc",
+            "tenant_id": f"eq.{tenant_id}",
+        }
+        if status == "PENDING":
+            params["or"] = f"(status.eq.PENDING,status.is.null)"
+        elif status != "ALL":
+            params["status"] = f"eq.{status}"
+        resp = _http.get(f"{_SUPABASE_URL}/rest/v1/review_queue", params=params, headers=_HEADERS, timeout=10)
         resp.raise_for_status()
-        return resp.json()
+        rows = resp.json()
+        for r in rows:
+            if isinstance(r.get("extra_fields"), str):
+                try:
+                    r["extra_fields"] = json.loads(r["extra_fields"])
+                except Exception:
+                    r["extra_fields"] = {}
+        return rows
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT name, email, cpf, extra_fields, legal_basis FROM review_queue WHERE tenant_id = ? ORDER BY id", (tenant_id,)
-        ).fetchall()
+        if status == "ALL":
+            rows = conn.execute(
+                "SELECT name,email,cpf,extra_fields,legal_basis,status,operator_approved_by "
+                "FROM review_queue WHERE tenant_id=? ORDER BY id", (tenant_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT name,email,cpf,extra_fields,legal_basis,status,operator_approved_by "
+                "FROM review_queue WHERE tenant_id=? AND COALESCE(status,'PENDING')=? ORDER BY id",
+                (tenant_id, status),
+            ).fetchall()
         result = []
         for r in rows:
             d = dict(r)
@@ -409,6 +444,98 @@ def get_queue(tenant_id: str = "default") -> list[dict]:
                     d["extra_fields"] = {}
             result.append(d)
         return result
+
+
+def operator_preapprove(
+    tenant_id: str, name: str, email: str | None, cpf: str | None, operator_email: str
+) -> bool:
+    """Mark a PENDING item as OPERATOR_APPROVED, storing corrected email/cpf. Returns True if found."""
+    now = datetime.now(timezone.utc).isoformat()
+    update: dict = {
+        "status": "OPERATOR_APPROVED",
+        "operator_approved_by": operator_email,
+        "operator_approved_at": now,
+    }
+    if email is not None:
+        update["email"] = email
+    if cpf is not None:
+        update["cpf"] = cpf
+
+    if USE_SUPABASE:
+        resp = _http.patch(
+            f"{_SUPABASE_URL}/rest/v1/review_queue",
+            json=update,
+            params={"name": f"eq.{name}", "tenant_id": f"eq.{tenant_id}",
+                    "or": f"(status.eq.PENDING,status.is.null)"},
+            headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
+        )
+        resp.raise_for_status()
+        return len(resp.json()) > 0
+
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            sets = ["status='OPERATOR_APPROVED'", "operator_approved_by=?", "operator_approved_at=?"]
+            args: list = [operator_email, now]
+            if email is not None:
+                sets.append("email=?"); args.append(email)
+            if cpf is not None:
+                sets.append("cpf=?"); args.append(cpf)
+            args.extend([name, tenant_id])
+            cur = conn.execute(
+                f"UPDATE review_queue SET {', '.join(sets)} "
+                "WHERE name=? AND tenant_id=? AND COALESCE(status,'PENDING')='PENDING'",
+                args,
+            )
+            return cur.rowcount > 0
+    return False
+
+
+def admin_finalize(tenant_id: str, name: str, admin_email: str) -> dict | None:
+    """Fetch and remove an OPERATOR_APPROVED item; returns its data for final processing."""
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/review_queue",
+            params={"select": "name,email,cpf,extra_fields,legal_basis",
+                    "name": f"eq.{name}", "tenant_id": f"eq.{tenant_id}",
+                    "status": "eq.OPERATOR_APPROVED"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if not rows:
+            return None
+        record = rows[0]
+        _http.delete(
+            f"{_SUPABASE_URL}/rest/v1/review_queue",
+            params={"name": f"eq.{name}", "tenant_id": f"eq.{tenant_id}"},
+            headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10,
+        ).raise_for_status()
+        if isinstance(record.get("extra_fields"), str):
+            try:
+                record["extra_fields"] = json.loads(record["extra_fields"])
+            except Exception:
+                record["extra_fields"] = {}
+        return record
+
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT name,email,cpf,extra_fields,legal_basis FROM review_queue "
+                "WHERE name=? AND tenant_id=? AND status='OPERATOR_APPROVED'",
+                (name, tenant_id),
+            ).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            if d.get("extra_fields"):
+                try:
+                    d["extra_fields"] = json.loads(d["extra_fields"])
+                except Exception:
+                    d["extra_fields"] = {}
+            conn.execute("DELETE FROM review_queue WHERE name=? AND tenant_id=?", (name, tenant_id))
+            return d
+    return None
 
 
 def remove_from_queue(name: str, tenant_id: str = "default") -> int:
