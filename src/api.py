@@ -679,7 +679,8 @@ def obter_webhook(tenant_id: str = Depends(_get_tenant_id)):
     wh = repository.get_webhook(tenant_id)
     if not wh:
         raise HTTPException(status_code=404, detail="Nenhum webhook configurado.")
-    return WebhookOut(url=wh["url"], secret=wh["secret"], active=bool(wh.get("active", True)))
+    masked = "***" + wh["secret"][-6:]
+    return WebhookOut(url=wh["url"], secret=masked, active=bool(wh.get("active", True)))
 
 
 @_router.delete("/webhook", status_code=status.HTTP_204_NO_CONTENT,
@@ -779,7 +780,8 @@ def expurgar_registro(
 
 
 @_router.delete("/admin/purge-expired",
-                summary="LGPD Art. 15 — expurga registros da fila sem ação há mais de N dias")
+                summary="LGPD Art. 15 — expurga registros da fila sem ação há mais de N dias",
+                dependencies=[Depends(_require_admin)])
 def purgar_expirados(days: int = 30, tenant_id: str = Depends(_get_tenant_id)):
     scope = None if tenant_id == "__admin__" else tenant_id
     deleted = repository.purge_expired_queue(tenant_id=scope, days=days)
