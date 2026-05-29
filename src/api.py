@@ -468,6 +468,62 @@ def listar_fila_revisao(painel: PainelOrquestracao = Depends(_get_painel)):
     ]
 
 
+class PendingApprovalItem(BaseModel):
+    name: str
+    email_hint: str
+    cpf_hint: str
+    operator_approved_by: str | None = None
+
+
+@_router.get("/pending-approval", response_model=list[PendingApprovalItem],
+             summary="Lista pré-aprovados aguardando aprovação final do admin (Four-Eyes)",
+             dependencies=[Depends(_require_admin)])
+def listar_pendentes_aprovacao(tenant_id: str = Depends(_get_tenant_id)):
+    items = repository.get_queue(tenant_id, status="OPERATOR_APPROVED")
+    return [
+        PendingApprovalItem(
+            name=item["name"],
+            email_hint=_hint(str(item.get("email", ""))),
+            cpf_hint=_hint(str(item.get("cpf", ""))),
+            operator_approved_by=item.get("operator_approved_by"),
+        )
+        for item in items
+    ]
+
+
+@_router.post("/admin-approve/{name}", response_model=RespostaIngestao,
+              summary="Aprovação final (admin) de registro pré-aprovado — dispara webhook",
+              dependencies=[Depends(_require_admin)])
+def admin_aprovar_registro(
+    name: str,
+    painel: PainelOrquestracao = Depends(_get_painel),
+    operator_email: str = Depends(_get_operator_email),
+):
+    record = repository.admin_finalize(painel.tenant_id, name, operator_email)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado em aprovações pendentes.")
+    before = len(painel.banco_limpo)
+    painel.resolver_direto(record)
+    after_records = painel.banco_limpo
+    if len(after_records) > before:
+        wh = repository.get_webhook(painel.tenant_id)
+        if wh and wh.get("active"):
+            repository.fire_webhook(wh["url"], wh["secret"], after_records[-1:])
+    repository.create_audit_log(
+        tenant_id=painel.tenant_id,
+        operator_email=operator_email,
+        record_name=name,
+        action="APPROVE_FINAL",
+        fields_affected={"four_eyes_principle": True},
+    )
+    return RespostaIngestao(
+        status="Aprovado",
+        mensagem=f"Registro '{name}' aprovado definitivamente e enviado ao banco limpo.",
+        registros_banco_limpo=len(after_records),
+        registros_fila_revisao=len(painel.fila_revisao),
+    )
+
+
 @_router.get("/database", summary="Retorna dados mascarados no display — dados reais no CSV/webhook")
 def visualizar_banco_seguro(
     painel: PainelOrquestracao = Depends(_get_painel),
@@ -530,12 +586,13 @@ def exportar_csv(
 
 
 @_router.post("/resolve", response_model=RespostaIngestao,
-              summary="Submete correção humana para um registro da fila",
+              summary="Submete correção humana. Operator → pré-aprovação; Admin → aprovação direta.",
               dependencies=[Depends(_require_operator)])
 def resolver_registro(
     cliente: ClienteInput,
     painel: PainelOrquestracao = Depends(_get_painel),
     operator_email: str = Depends(_get_operator_email),
+    role: str = Depends(_get_role),
 ):
     before = len(painel.banco_limpo)
     original = next((r for r in painel.fila_revisao if r["name"] == cliente.name), {})
@@ -544,6 +601,30 @@ def resolver_registro(
         "email": cliente.email if cliente.email is not None else original.get("email"),
         "cpf":   cliente.cpf   if cliente.cpf   is not None else original.get("cpf"),
     }
+
+    if role == "operator":
+        # Four-Eyes step 1: mark as OPERATOR_APPROVED, do NOT add to banco_limpo or fire webhook
+        ok = repository.operator_preapprove(
+            painel.tenant_id, cliente.name,
+            merged.get("email"), merged.get("cpf"), operator_email,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Registro '{cliente.name}' não encontrado na fila.")
+        repository.create_audit_log(
+            tenant_id=painel.tenant_id,
+            operator_email=operator_email,
+            record_name=cliente.name,
+            action="PREAPPROVE_MANUAL",
+            fields_affected={"email_provided": cliente.email is not None, "cpf_provided": cliente.cpf is not None},
+        )
+        return RespostaIngestao(
+            status="Pré-aprovado",
+            mensagem=f"Registro '{cliente.name}' aguarda aprovação final do admin.",
+            registros_banco_limpo=before,
+            registros_fila_revisao=max(0, len(painel.fila_revisao) - 1),
+        )
+
+    # Admin path: direct resolve + webhook (bypasses Four-Eyes)
     painel.remover_da_fila(cliente.name)
     painel.resolver_direto(merged)
     after_records = painel.banco_limpo
@@ -572,11 +653,12 @@ def resolver_registro(
 
 
 @_router.post("/bulk-resolve", response_model=BulkResolveReport,
-              summary="Resolve em lote registros da fila — único round-trip HTTP, N operações DB")
+              summary="Resolve em lote. Operator → pré-aprovação em massa; Admin → aprovação direta.")
 def bulk_resolver(
     payload: BulkResolveInput,
     painel: PainelOrquestracao = Depends(_get_painel),
     operator_email: str = Depends(_get_operator_email),
+    role: str = Depends(_get_role),
 ):
     queue_index = {r["name"]: r for r in painel.fila_revisao}
     wh = repository.get_webhook(painel.tenant_id)
@@ -597,41 +679,61 @@ def bulk_resolver(
             "cpf":   item.cpf   if item.cpf   is not None else original.get("cpf"),
         }
 
-        has_valid_fix = (item.email is not None and item.email not in ("", "—")) \
-                     or (item.cpf   is not None and item.cpf   not in ("", "—"))
+        has_valid_fix = (item.email if item.email is not None and item.email not in ("", "—") else None) \
+                     or (item.cpf   if item.cpf   is not None and item.cpf   not in ("", "—") else None)
 
         if not has_valid_fix and payload.mode == "auto":
             skipped += 1
             details.append(BulkResolveDetail(name=item.name, status="skipped", detail="sem sugestão automática"))
             continue
 
-        # resolver_direto bypasses re-queue validation — AI/human approval is trusted
-        painel.remover_da_fila(item.name)
-        painel.resolver_direto(merged)
-
-        approved += 1
-        from masking import mask_email, mask_cpf
-        approved_records.append({
-            "name": merged["name"],
-            "email": mask_email(merged.get("email") or ""),
-            "cpf":   mask_cpf(merged.get("cpf") or ""),
-        })
-        details.append(BulkResolveDetail(
-            name=item.name, status="success",
-            detail=f"email={merged['email']}" if item.email else f"cpf={merged['cpf']}"
-        ))
-        item_legal_basis = original.get("legal_basis")
-        repository.create_audit_log(
-            tenant_id=painel.tenant_id,
-            operator_email=operator_email,
-            record_name=item.name,
-            action="APPROVE_BULK",
-            fields_affected={
-                "email_provided": item.email is not None,
-                "cpf_provided": item.cpf is not None,
-                **({"legal_basis": item_legal_basis} if item_legal_basis else {}),
-            },
-        )
+        if role == "operator":
+            # Four-Eyes step 1: pre-approve, no webhook
+            ok = repository.operator_preapprove(
+                painel.tenant_id, item.name,
+                merged.get("email"), merged.get("cpf"), operator_email,
+            )
+            if not ok:
+                errors += 1
+                details.append(BulkResolveDetail(name=item.name, status="error", detail="Não encontrado na fila"))
+                continue
+            approved += 1
+            details.append(BulkResolveDetail(name=item.name, status="pre-approved",
+                                              detail="aguardando aprovação final do admin"))
+            repository.create_audit_log(
+                tenant_id=painel.tenant_id,
+                operator_email=operator_email,
+                record_name=item.name,
+                action="PREAPPROVE_BULK",
+                fields_affected={"email_provided": item.email is not None, "cpf_provided": item.cpf is not None},
+            )
+        else:
+            # Admin direct path: resolver_direto + webhook
+            painel.remover_da_fila(item.name)
+            painel.resolver_direto(merged)
+            approved += 1
+            from masking import mask_email, mask_cpf
+            approved_records.append({
+                "name": merged["name"],
+                "email": mask_email(merged.get("email") or ""),
+                "cpf":   mask_cpf(merged.get("cpf") or ""),
+            })
+            details.append(BulkResolveDetail(
+                name=item.name, status="success",
+                detail=f"email={merged['email']}" if item.email else f"cpf={merged['cpf']}"
+            ))
+            item_legal_basis = original.get("legal_basis")
+            repository.create_audit_log(
+                tenant_id=painel.tenant_id,
+                operator_email=operator_email,
+                record_name=item.name,
+                action="APPROVE_BULK",
+                fields_affected={
+                    "email_provided": item.email is not None,
+                    "cpf_provided": item.cpf is not None,
+                    **({"legal_basis": item_legal_basis} if item_legal_basis else {}),
+                },
+            )
 
     if approved_records and wh and wh.get("active"):
         repository.fire_webhook(wh["url"], wh["secret"], approved_records)
