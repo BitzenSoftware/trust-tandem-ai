@@ -28,11 +28,13 @@ function MoonIcon() {
 export default function LoginPage() {
   const router = useRouter();
   const { t } = useTranslation();
-  const [email,    setEmail]    = useState("");
-  const [password, setPassword] = useState("");
-  const [error,    setError]    = useState("");
-  const [loading,  setLoading]  = useState(false);
-  const [theme,    setTheme]    = useState<"light"|"dark">("light");
+  const [email,      setEmail]      = useState("");
+  const [password,   setPassword]   = useState("");
+  const [error,      setError]      = useState("");
+  const [loading,    setLoading]    = useState(false);
+  const [theme,      setTheme]      = useState<"light"|"dark">("light");
+  const [mode,       setMode]       = useState<"login" | "forgot">("login");
+  const [resetSent,  setResetSent]  = useState(false);
 
   useEffect(() => {
     const saved = (localStorage.getItem("theme") || document.documentElement.getAttribute("data-theme") || "light") as "light"|"dark";
@@ -59,6 +61,18 @@ export default function LoginPage() {
         setError(t.login.errorInvalid);
       setLoading(false);
     } else { router.push("/dashboard"); router.refresh(); }
+  }
+
+  async function handleForgotPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email) { setError("Insira o seu e-mail."); return; }
+    setLoading(true); setError("");
+    const supabase = createClient();
+    const redirectTo = `${window.location.origin}/reset-password`;
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+    setLoading(false);
+    if (error) setError("Erro ao enviar e-mail. Verifique o endereço e tente novamente.");
+    else setResetSent(true);
   }
 
   const s = {
@@ -94,30 +108,63 @@ export default function LoginPage() {
           <p style={s.subtitle}>{t.login.subtitle}</p>
         </div>
 
-        <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div>
-            <label style={s.label}>{t.login.email}</label>
-            <input
-              type="email" required value={email}
-              onChange={e => setEmail(e.target.value)}
-              style={s.input} placeholder="seu@email.com"
-            />
-          </div>
-          <div>
-            <label style={s.label}>{t.login.password}</label>
-            <input
-              type="password" required value={password}
-              onChange={e => setPassword(e.target.value)}
-              style={s.input} placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
-            />
-          </div>
-
-          {error && <div style={s.error}>{error}</div>}
-
-          <button type="submit" disabled={loading} style={{ ...s.btn, opacity: loading ? 0.6 : 1 }}>
-            {loading ? t.login.submitting : t.login.submit}
-          </button>
-        </form>
+        {mode === "forgot" ? (
+          resetSent ? (
+            <div style={{ textAlign: "center" as const }}>
+              <p style={{ fontSize: "2rem", marginBottom: 12 }}>📬</p>
+              <p style={{ fontWeight: 700, color: "var(--text-primary)", marginBottom: 8 }}>E-mail enviado!</p>
+              <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginBottom: 24 }}>
+                Verifique a caixa de entrada de <strong>{email}</strong> e clique no link para redefinir a senha.
+              </p>
+              <button type="button" onClick={() => { setMode("login"); setResetSent(false); setError(""); }}
+                style={{ ...s.btn, backgroundColor: "transparent", color: "var(--accent)", border: "1px solid var(--accent)" }}>
+                Voltar ao login
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleForgotPassword} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginTop: -8 }}>
+                Insira o e-mail da sua conta. Enviaremos um link para redefinir a senha.
+              </p>
+              <div>
+                <label style={s.label}>{t.login.email}</label>
+                <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                  style={s.input} placeholder="seu@email.com" />
+              </div>
+              {error && <div style={s.error}>{error}</div>}
+              <button type="submit" disabled={loading} style={{ ...s.btn, opacity: loading ? 0.6 : 1 }}>
+                {loading ? "Enviando..." : "Enviar link de redefinição"}
+              </button>
+              <button type="button" onClick={() => { setMode("login"); setError(""); }}
+                style={{ background: "none", border: "none", color: "var(--text-muted)", fontSize: "0.82rem", cursor: "pointer", marginTop: -4 }}>
+                ← Voltar ao login
+              </button>
+            </form>
+          )
+        ) : (
+          <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div>
+              <label style={s.label}>{t.login.email}</label>
+              <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                style={s.input} placeholder="seu@email.com" />
+            </div>
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                <label style={{ ...s.label, marginBottom: 0 }}>{t.login.password}</label>
+                <button type="button" onClick={() => { setMode("forgot"); setError(""); }}
+                  style={{ background: "none", border: "none", color: "var(--accent)", fontSize: "0.75rem", fontWeight: 600, cursor: "pointer", padding: 0 }}>
+                  Esqueci a senha
+                </button>
+              </div>
+              <input type="password" required value={password} onChange={e => setPassword(e.target.value)}
+                style={s.input} placeholder="••••••••" />
+            </div>
+            {error && <div style={s.error}>{error}</div>}
+            <button type="submit" disabled={loading} style={{ ...s.btn, opacity: loading ? 0.6 : 1 }}>
+              {loading ? t.login.submitting : t.login.submit}
+            </button>
+          </form>
+        )}
 
         <p style={s.footer}>
           {t.login.noAccount}{" "}
