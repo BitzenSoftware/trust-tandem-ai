@@ -1183,15 +1183,26 @@ export default function DashboardClient({ token, userName }: { token: string; us
               {/* Select-all toolbar */}
               <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "6px 4px" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: "0.84rem", color: "var(--text-secondary)", fontWeight: 500, userSelect: "none" as const }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedNames.length === queue.length && queue.length > 0}
-                    onChange={e => setSelectedNames(e.target.checked ? queue.map(r => r.name) : [])}
-                    style={{ width: 16, height: 16, cursor: "pointer", accentColor: "var(--accent)" }}
-                  />
-                  {selectedNames.length === queue.length && queue.length > 0
-                    ? `${t.bulk.deselectAll} (${queue.length})`
-                    : `${t.bulk.selectAll} (${queue.length})`}
+                  {(() => {
+                    const pageNames = queue.slice(queuePage * QUEUE_PAGE_SIZE, (queuePage + 1) * QUEUE_PAGE_SIZE).map(r => r.name);
+                    const allPageSelected = pageNames.length > 0 && pageNames.every(n => selectedNames.includes(n));
+                    return (
+                      <>
+                        <input
+                          type="checkbox"
+                          checked={allPageSelected}
+                          onChange={e => setSelectedNames(e.target.checked
+                            ? [...new Set([...selectedNames, ...pageNames])]
+                            : selectedNames.filter(n => !pageNames.includes(n))
+                          )}
+                          style={{ width: 16, height: 16, cursor: "pointer", accentColor: "var(--accent)" }}
+                        />
+                        {allPageSelected
+                          ? `${t.bulk.deselectAll} (${pageNames.length})`
+                          : `${t.bulk.selectAll} (${pageNames.length})`}
+                      </>
+                    );
+                  })()}
                 </label>
                 {selectedNames.length > 0 && (
                   <span style={{ fontSize: "0.78rem", color: "var(--accent)", fontWeight: 700 }}>
