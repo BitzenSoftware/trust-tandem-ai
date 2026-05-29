@@ -141,8 +141,10 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [webhookCurrent, setWebhookCurrent] = useState<{ url: string; secret: string; active: boolean } | null>(null);
   const [webhookLoading, setWebhookLoading] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [trialExpired,   setTrialExpired]   = useState(false);
-  const [dbTotal,        setDbTotal]        = useState<number | null>(null);
+  const [trialExpired,      setTrialExpired]      = useState(false);
+  const [dbTotal,           setDbTotal]           = useState<number | null>(null);
+  const [exportRowsPerFile, setExportRowsPerFile] = useState(10000);
+  const [exportProgress,    setExportProgress]    = useState<{ part: number } | null>(null);
 
   // ── Queue pagination ─────────────────────────────────────────────────────
   const QUEUE_PAGE_SIZE = 50;
@@ -526,15 +528,39 @@ export default function DashboardClient({ token, userName }: { token: string; us
   async function handleExportCSV() {
     const h = await getFreshHeaders();
     if (!h) return;
-    const res = await apiFetch(`${API}/database/export`, { headers: h });
-    if (!res || !res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `trust-tandem-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+
+    const today = new Date().toISOString().slice(0, 10);
+    let afterId: number | null = null;
+    let part = 1;
+    let hasMore = true;
+
+    setExportProgress({ part: 1 });
+
+    while (hasMore) {
+      const params = new URLSearchParams({ limit: String(exportRowsPerFile) });
+      if (afterId !== null) params.set("after_id", String(afterId));
+
+      const res = await apiFetch(`${API}/database/export?${params}`, { headers: h });
+      if (!res || !res.ok) { setExportProgress(null); return; }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `trust-tandem-${today}-part${String(part).padStart(2, "0")}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      hasMore = res.headers.get("X-Has-More") === "true";
+      if (hasMore) {
+        afterId = Number(res.headers.get("X-Next-Cursor"));
+        part++;
+        setExportProgress({ part });
+        await new Promise(r => setTimeout(r, 600));
+      }
+    }
+
+    setExportProgress(null);
   }
 
   function autoMapColumns(columns: string[], currentSchema: FieldSchema[]): Record<string, string> {
@@ -1141,12 +1167,32 @@ export default function DashboardClient({ token, userName }: { token: string; us
               <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <p style={{ ...s.sectionTitle, margin: 0 }}>{t.dashboard.tableTitle}</p>
                 {db.length > 0 && (
-                  <button
-                    onClick={handleExportCSV}
-                    style={{ padding: "6px 14px", fontSize: "0.8rem", fontWeight: 600, color: "var(--accent)", background: "none", border: "1px solid var(--accent)", borderRadius: 8, cursor: "pointer" }}
-                  >
-                    ↓ {t.dashboard.exportCsv}
-                  </button>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {exportProgress ? (
+                      <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                        Baixando parte {exportProgress.part}...
+                      </span>
+                    ) : (
+                      <select
+                        title="Linhas por arquivo"
+                        value={exportRowsPerFile}
+                        onChange={e => setExportRowsPerFile(Number(e.target.value))}
+                        style={{ fontSize: "0.75rem", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 8px", background: "var(--bg-surface-2)", color: "var(--text-secondary)", cursor: "pointer" }}
+                      >
+                        <option value={1000}>1 000 / arquivo</option>
+                        <option value={5000}>5 000 / arquivo</option>
+                        <option value={10000}>10 000 / arquivo</option>
+                        <option value={50000}>50 000 / arquivo</option>
+                      </select>
+                    )}
+                    <button
+                      onClick={handleExportCSV}
+                      disabled={!!exportProgress}
+                      style={{ padding: "6px 14px", fontSize: "0.8rem", fontWeight: 600, color: "var(--accent)", background: "none", border: "1px solid var(--accent)", borderRadius: 8, cursor: exportProgress ? "not-allowed" : "pointer", opacity: exportProgress ? 0.6 : 1 }}
+                    >
+                      ↓ {t.dashboard.exportCsv}
+                    </button>
+                  </div>
                 )}
               </div>
               {db.length === 0 ? (
