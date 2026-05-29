@@ -197,6 +197,46 @@ def _rate_limit(tenant_id: str = Depends(_get_tenant_id)) -> None:
     _rate_limiter.check(tenant_id)
 
 
+# Role resolution with 60s in-memory cache
+_role_cache: dict[str, tuple[str, float]] = {}
+_ROLE_CACHE_TTL = 60
+
+
+def _get_role(
+    creds: HTTPAuthorizationCredentials | None = Security(_bearer),
+    api_key: str | None = Security(_key_scheme),
+    tenant_id: str = Depends(_get_tenant_id),
+) -> str:
+    """Returns 'admin' | 'operator' | 'viewer' for the authenticated caller."""
+    if tenant_id == "__admin__":
+        return "admin"
+    if not creds:
+        return "admin"  # API-key callers are tenant admins
+    email = _decode_jwt_email(creds.credentials)
+    if not email:
+        return "admin"
+    cache_key = f"{tenant_id}:{email}"
+    now = time.monotonic()
+    cached = _role_cache.get(cache_key)
+    if cached and (now - cached[1]) < _ROLE_CACHE_TTL:
+        return cached[0]
+    member = repository.get_tenant_member_by_email(tenant_id, email)
+    # Users without a member record are the account owner → admin
+    role = member["role"] if member else "admin"
+    _role_cache[cache_key] = (role, now)
+    return role
+
+
+def _require_admin(role: str = Depends(_get_role)) -> None:
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Requer papel admin.")
+
+
+def _require_operator(role: str = Depends(_get_role)) -> None:
+    if role not in ("admin", "operator"):
+        raise HTTPException(status_code=403, detail="Requer papel operator ou admin.")
+
+
 def _decode_jwt_email(token: str) -> str:
     """Extracts email from JWT payload without re-verifying (already validated by Supabase)."""
     try:
@@ -346,6 +386,19 @@ class BulkResolveReport(BaseModel):
     details: list[BulkResolveDetail]
 
 
+class MemberIn(BaseModel):
+    email: str
+    role: str = "operator"  # "admin" | "operator" | "viewer"
+
+
+class MemberOut(BaseModel):
+    id: Optional[int] = None
+    email: str
+    role: str
+    invited_by: Optional[str] = None
+    created_at: Optional[str] = None
+
+
 class PlanConfigIn(BaseModel):
     field_limit: int
     price_monthly: float = 0.0
@@ -477,7 +530,8 @@ def exportar_csv(
 
 
 @_router.post("/resolve", response_model=RespostaIngestao,
-              summary="Submete correção humana para um registro da fila")
+              summary="Submete correção humana para um registro da fila",
+              dependencies=[Depends(_require_operator)])
 def resolver_registro(
     cliente: ClienteInput,
     painel: PainelOrquestracao = Depends(_get_painel),
@@ -590,7 +644,8 @@ def bulk_resolver(
 
 
 @_router.post("/keys", response_model=ApiKeyOut, status_code=status.HTTP_201_CREATED,
-              summary="Gera nova API Key para este tenant")
+              summary="Gera nova API Key para este tenant",
+              dependencies=[Depends(_require_admin)])
 def criar_api_key(body: ApiKeyCreate, tenant_id: str = Depends(_get_tenant_id)):
     plain, key_id, created_at = repository.create_api_key(tenant_id, body.label)
     return ApiKeyOut(id=key_id, label=body.label, created_at=str(created_at), key=plain)
@@ -603,14 +658,16 @@ def listar_api_keys(tenant_id: str = Depends(_get_tenant_id)):
 
 
 @_router.delete("/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT,
-                summary="Revoga uma API Key")
+                summary="Revoga uma API Key",
+                dependencies=[Depends(_require_admin)])
 def revogar_api_key(key_id: int, tenant_id: str = Depends(_get_tenant_id)):
     if not repository.revoke_api_key(key_id, tenant_id):
         raise HTTPException(status_code=404, detail="API Key não encontrada.")
 
 
 @_router.post("/webhook", response_model=WebhookOut,
-              summary="Configura webhook de saída (upsert)")
+              summary="Configura webhook de saída (upsert)",
+              dependencies=[Depends(_require_admin)])
 def configurar_webhook(body: WebhookIn, tenant_id: str = Depends(_get_tenant_id)):
     secret = repository.save_webhook(tenant_id, body.url)
     return WebhookOut(url=body.url, secret=secret, active=True)
@@ -626,7 +683,8 @@ def obter_webhook(tenant_id: str = Depends(_get_tenant_id)):
 
 
 @_router.delete("/webhook", status_code=status.HTTP_204_NO_CONTENT,
-                summary="Remove webhook do tenant")
+                summary="Remove webhook do tenant",
+                dependencies=[Depends(_require_admin)])
 def remover_webhook(tenant_id: str = Depends(_get_tenant_id)):
     repository.delete_webhook(tenant_id)
 
@@ -701,7 +759,8 @@ def analisar_registro(name: str, painel: PainelOrquestracao = Depends(_get_paine
 
 
 @_router.delete("/review-queue/{name}", status_code=status.HTTP_204_NO_CONTENT,
-                summary="Expurga um registro da fila (direito ao esquecimento LGPD)")
+                summary="Expurga um registro da fila (direito ao esquecimento LGPD)",
+                dependencies=[Depends(_require_operator)])
 def expurgar_registro(
     name: str,
     painel: PainelOrquestracao = Depends(_get_painel),
@@ -749,9 +808,10 @@ def obter_schema(tenant_id: str = Depends(_get_tenant_id)):
 def admin_profile(
     creds: HTTPAuthorizationCredentials | None = Security(_bearer),
     tenant_id: str = Depends(_get_tenant_id),
+    role: str = Depends(_get_role),
 ):
     email = _decode_jwt_email(creds.credentials) if creds else ""
-    return {"is_super_admin": tenant_id == "__admin__", "email": email}
+    return {"is_super_admin": tenant_id == "__admin__", "email": email, "role": role}
 
 
 @_router.get("/admin/plans", summary="Lista configurações de planos [super admin]",
@@ -810,7 +870,8 @@ def obter_plano(tenant_id: str = Depends(_get_tenant_id)):
 
 
 @_router.post("/schema/fields", status_code=status.HTTP_201_CREATED,
-              summary="Adiciona ou actualiza um campo no schema do tenant")
+              summary="Adiciona ou actualiza um campo no schema do tenant",
+              dependencies=[Depends(_require_admin)])
 def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
     if body.field_key == "name":
         raise HTTPException(status_code=400, detail="O campo 'name' é reservado e não pode ser configurado.")
@@ -849,7 +910,8 @@ def obter_subscricao(tenant_id: str = Depends(_get_tenant_id)):
     return repository.get_tenant_subscription(tenant_id)
 
 
-@_router.post("/subscription/checkout", summary="Cria sessão Stripe Checkout para assinar um plano")
+@_router.post("/subscription/checkout", summary="Cria sessão Stripe Checkout para assinar um plano",
+              dependencies=[Depends(_require_admin)])
 def criar_checkout(body: CheckoutIn, tenant_id: str = Depends(_get_tenant_id)):
     import stripe as _stripe
     stripe_key = _get_stripe_key()
@@ -893,7 +955,8 @@ def criar_checkout(body: CheckoutIn, tenant_id: str = Depends(_get_tenant_id)):
         raise HTTPException(status_code=502, detail=f"Erro ao criar checkout: {e}")
 
 
-@_router.post("/subscription/portal", summary="Cria sessão do portal Stripe para gerir subscrição")
+@_router.post("/subscription/portal", summary="Cria sessão do portal Stripe para gerir subscrição",
+              dependencies=[Depends(_require_admin)])
 def criar_portal(tenant_id: str = Depends(_get_tenant_id)):
     import stripe as _stripe
     stripe_key = _get_stripe_key()
@@ -968,7 +1031,8 @@ def deletar_enterprise_client(client_tenant_id: str):
 
 
 @_router.delete("/schema/fields/{field_key}", status_code=status.HTTP_204_NO_CONTENT,
-                summary="Remove um campo do schema do tenant")
+                summary="Remove um campo do schema do tenant",
+                dependencies=[Depends(_require_admin)])
 def remover_campo(field_key: str, tenant_id: str = Depends(_get_tenant_id)):
     deleted = repository.delete_field_schema(tenant_id, field_key)
     if deleted == 0:
@@ -976,9 +1040,58 @@ def remover_campo(field_key: str, tenant_id: str = Depends(_get_tenant_id)):
 
 
 @_router.delete("/reset", status_code=status.HTTP_204_NO_CONTENT,
-                summary="Limpa o estado da sessão (útil para testes)")
+                summary="Limpa o estado da sessão (útil para testes)",
+                dependencies=[Depends(_require_admin)])
 def resetar_estado(painel: PainelOrquestracao = Depends(_get_painel)):
     painel.limpar_tudo()
+
+
+# --- Members ---
+
+@_router.get("/members", response_model=list[MemberOut],
+             summary="Lista membros e papéis do tenant")
+def listar_membros(tenant_id: str = Depends(_get_tenant_id)):
+    return repository.list_tenant_members(tenant_id)
+
+
+@_router.post("/members", response_model=MemberOut, status_code=status.HTTP_201_CREATED,
+              summary="Adiciona ou actualiza membro no tenant (admin)",
+              dependencies=[Depends(_require_admin)])
+def convidar_membro(
+    body: MemberIn,
+    tenant_id: str = Depends(_get_tenant_id),
+    operator_email: str = Depends(_get_operator_email),
+):
+    if body.role not in ("admin", "operator", "viewer"):
+        raise HTTPException(status_code=400, detail="role deve ser admin, operator ou viewer.")
+    result = repository.add_tenant_member(tenant_id, body.email.lower().strip(), body.role, operator_email)
+    return result
+
+
+@_router.patch("/members/{email}", response_model=MemberOut,
+               summary="Altera papel de membro existente (admin)",
+               dependencies=[Depends(_require_admin)])
+def alterar_papel_membro(
+    email: str,
+    body: MemberIn,
+    tenant_id: str = Depends(_get_tenant_id),
+):
+    if body.role not in ("admin", "operator", "viewer"):
+        raise HTTPException(status_code=400, detail="role deve ser admin, operator ou viewer.")
+    updated = repository.update_tenant_member_role(tenant_id, email, body.role)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Membro '{email}' não encontrado.")
+    member = repository.get_tenant_member_by_email(tenant_id, email)
+    return member
+
+
+@_router.delete("/members/{email}", status_code=status.HTTP_204_NO_CONTENT,
+                summary="Remove membro do tenant (admin)",
+                dependencies=[Depends(_require_admin)])
+def remover_membro(email: str, tenant_id: str = Depends(_get_tenant_id)):
+    deleted = repository.remove_tenant_member(tenant_id, email)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Membro '{email}' não encontrado.")
 
 
 @app.post("/stripe/webhook", include_in_schema=False)
