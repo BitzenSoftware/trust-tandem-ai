@@ -121,6 +121,17 @@ def init_db() -> None:
                 created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tenant_members (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id  TEXT NOT NULL,
+                email      TEXT NOT NULL,
+                role       TEXT NOT NULL DEFAULT 'operator',
+                invited_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(tenant_id, email)
+            )
+        """)
 
 
 # --- clean_records ---
@@ -1237,6 +1248,109 @@ def sync_stripe_plans(stripe_secret_key: str) -> list[dict]:
             continue
 
     return updated
+
+
+# --- tenant_members ---
+
+def get_tenant_member_by_email(tenant_id: str, email: str) -> dict | None:
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/tenant_members",
+            params={"select": "id,email,role,invited_by,created_at",
+                    "tenant_id": f"eq.{tenant_id}", "email": f"eq.{email}"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0] if rows else None
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT id, email, role, invited_by, created_at FROM tenant_members WHERE tenant_id = ? AND email = ?",
+                (tenant_id, email),
+            ).fetchone()
+            return dict(row) if row else None
+    return None
+
+
+def list_tenant_members(tenant_id: str) -> list[dict]:
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/tenant_members",
+            params={"select": "id,email,role,invited_by,created_at",
+                    "tenant_id": f"eq.{tenant_id}", "order": "created_at.asc"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute(
+                "SELECT id, email, role, invited_by, created_at FROM tenant_members WHERE tenant_id = ? ORDER BY created_at",
+                (tenant_id,),
+            ).fetchall()]
+    return []
+
+
+def add_tenant_member(tenant_id: str, email: str, role: str, invited_by: str) -> dict:
+    payload = {"tenant_id": tenant_id, "email": email, "role": role, "invited_by": invited_by}
+    if USE_SUPABASE:
+        resp = _http.post(
+            f"{_SUPABASE_URL}/rest/v1/tenant_members",
+            json=payload,
+            headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
+            params={"on_conflict": "tenant_id,email"}, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0] if rows else payload
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO tenant_members (tenant_id, email, role, invited_by) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(tenant_id, email) DO UPDATE SET role=excluded.role, invited_by=excluded.invited_by",
+            (tenant_id, email, role, invited_by),
+        )
+    return payload
+
+
+def update_tenant_member_role(tenant_id: str, email: str, role: str) -> int:
+    if USE_SUPABASE:
+        resp = _http.patch(
+            f"{_SUPABASE_URL}/rest/v1/tenant_members",
+            json={"role": role},
+            params={"tenant_id": f"eq.{tenant_id}", "email": f"eq.{email}"},
+            headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
+        )
+        resp.raise_for_status()
+        return len(resp.json())
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            return conn.execute(
+                "UPDATE tenant_members SET role = ? WHERE tenant_id = ? AND email = ?",
+                (role, tenant_id, email),
+            ).rowcount
+    return 0
+
+
+def remove_tenant_member(tenant_id: str, email: str) -> int:
+    if USE_SUPABASE:
+        resp = _http.delete(
+            f"{_SUPABASE_URL}/rest/v1/tenant_members",
+            params={"tenant_id": f"eq.{tenant_id}", "email": f"eq.{email}"},
+            headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
+        )
+        resp.raise_for_status()
+        return len(resp.json())
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            return conn.execute(
+                "DELETE FROM tenant_members WHERE tenant_id = ? AND email = ?",
+                (tenant_id, email),
+            ).rowcount
+    return 0
 
 
 def fire_webhook(url: str, secret: str, records: list[dict]) -> None:
