@@ -435,8 +435,12 @@ def contar_banco(painel: PainelOrquestracao = Depends(_get_painel)):
     return {"count": repository.count_clean_records(painel.tenant_id)}
 
 
-@_router.get("/database/export", summary="Exporta todos os dados limpos como CSV")
-def exportar_csv(painel: PainelOrquestracao = Depends(_get_painel)):
+@_router.get("/database/export", summary="Exporta dados limpos como CSV — suporta split em partes")
+def exportar_csv(
+    painel: PainelOrquestracao = Depends(_get_painel),
+    limit: int = Query(default=10000, ge=100, le=50000, description="Registros por arquivo (100–50 000)"),
+    after_id: Optional[int] = Query(default=None, description="Cursor: ID do último registro da parte anterior"),
+):
     import csv
     import io
     from datetime import date
@@ -444,22 +448,32 @@ def exportar_csv(painel: PainelOrquestracao = Depends(_get_painel)):
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=["name", "email", "cpf"])
     writer.writeheader()
-    after_id = None
-    while True:
-        page, next_cursor = repository.get_clean_records_paginated(painel.tenant_id, after_id, 500)
+
+    collected = 0
+    cursor = after_id
+    next_cursor = None
+    BATCH = 1000
+
+    while collected < limit:
+        batch = min(BATCH, limit - collected)
+        page, nc = repository.get_clean_records_paginated(painel.tenant_id, cursor, batch)
         for row in page:
             writer.writerow({"name": row["name"], "email": row["email"], "cpf": row["cpf"]})
-        if next_cursor is None:
+        collected += len(page)
+        cursor = nc
+        next_cursor = nc
+        if nc is None:
             break
-        after_id = next_cursor
 
     today = date.today().isoformat()
     content = ("﻿" + buf.getvalue()).encode("utf-8")
-    return Response(
-        content=content,
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="trust-tandem-{today}.csv"'},
-    )
+    resp_headers: dict[str, str] = {
+        "Content-Disposition": f'attachment; filename="trust-tandem-{today}.csv"',
+        "X-Has-More": "true" if next_cursor is not None else "false",
+    }
+    if next_cursor is not None:
+        resp_headers["X-Next-Cursor"] = str(next_cursor)
+    return Response(content=content, media_type="text/csv; charset=utf-8", headers=resp_headers)
 
 
 @_router.post("/resolve", response_model=RespostaIngestao,
