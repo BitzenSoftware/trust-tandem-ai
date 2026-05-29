@@ -145,6 +145,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [dbTotal,           setDbTotal]           = useState<number | null>(null);
   const [exportRowsPerFile, setExportRowsPerFile] = useState(10000);
   const [exportProgress,    setExportProgress]    = useState<{ part: number } | null>(null);
+  const [userRole,          setUserRole]          = useState<"admin" | "operator" | "viewer">("admin");
+  const [members,           setMembers]           = useState<{ id: number; email: string; role: string; invited_by: string | null; created_at: string }[]>([]);
+  const [membersLoaded,     setMembersLoaded]     = useState(false);
+  const [newMember,         setNewMember]         = useState({ email: "", role: "operator" });
+  const [memberSaving,      setMemberSaving]      = useState(false);
+  const [memberError,       setMemberError]       = useState("");
 
   // ── Queue pagination ─────────────────────────────────────────────────────
   const QUEUE_PAGE_SIZE = 50;
@@ -199,6 +205,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
       if (profileRes.ok) {
         const prof = await profileRes.json();
         setIsSuperAdmin(prof.is_super_admin);
+        if (prof.role) setUserRole(prof.role as "admin" | "operator" | "viewer");
       }
       if (dbRes.ok) setDb(await dbRes.json());
       else if (dbRes.status === 402) { setTrialExpired(true); }
@@ -236,9 +243,10 @@ export default function DashboardClient({ token, userName }: { token: string; us
     const h = await getFreshHeaders();
     if (!h) return;
     try {
-      const [keysRes, whRes] = await Promise.all([
-        apiFetch(`${API}/keys`, { headers: h }),
+      const [keysRes, whRes, membersRes] = await Promise.all([
+        apiFetch(`${API}/keys`,    { headers: h }),
         apiFetch(`${API}/webhook`, { headers: h }),
+        apiFetch(`${API}/members`, { headers: h }),
       ]);
       if (keysRes.ok) setApiKeys(await keysRes.json());
       if (whRes.ok) {
@@ -246,9 +254,52 @@ export default function DashboardClient({ token, userName }: { token: string; us
         setWebhookCurrent(wh);
         setWebhookUrl(wh.url);
       }
+      if (membersRes.ok) { setMembers(await membersRes.json()); setMembersLoaded(true); }
     } catch { /* ignore */ }
     finally { setSettingsLoaded(true); }
   }, []);
+
+  async function handleAddMember() {
+    if (!newMember.email) return;
+    setMemberSaving(true); setMemberError("");
+    const h = await getFreshHeaders();
+    if (!h) { setMemberSaving(false); return; }
+    try {
+      const res = await apiFetch(`${API}/members`, {
+        method: "POST", headers: h,
+        body: JSON.stringify(newMember),
+      });
+      if (res.ok) {
+        setNewMember({ email: "", role: "operator" });
+        const membersRes = await apiFetch(`${API}/members`, { headers: h });
+        if (membersRes.ok) setMembers(await membersRes.json());
+      } else {
+        const b = await res.json().catch(() => ({}));
+        setMemberError(b.detail || `Erro ${res.status}`);
+      }
+    } catch { setMemberError("Erro de conexão."); }
+    finally { setMemberSaving(false); }
+  }
+
+  async function handleRemoveMember(email: string) {
+    if (!confirm(`Remover ${email} da equipa?`)) return;
+    const h = await getFreshHeaders();
+    if (!h) return;
+    await apiFetch(`${API}/members/${encodeURIComponent(email)}`, { method: "DELETE", headers: h });
+    setMembers(prev => prev.filter(m => m.email !== email));
+  }
+
+  async function handleChangeMemberRole(email: string, role: string) {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    const res = await apiFetch(`${API}/members/${encodeURIComponent(email)}`, {
+      method: "PATCH", headers: h,
+      body: JSON.stringify({ email, role }),
+    });
+    if (res.ok) {
+      setMembers(prev => prev.map(m => m.email === email ? { ...m, role } : m));
+    }
+  }
 
   const fetchSchema = useCallback(async () => {
     const h = await getFreshHeaders();
@@ -1039,6 +1090,14 @@ export default function DashboardClient({ token, userName }: { token: string; us
               {theme === "light" ? "Dark" : "Light"}
             </button>
             <span style={s.userName}>{userName}</span>
+            {userRole !== "admin" && (
+              <span style={{ fontSize: "0.65rem", fontWeight: 700, padding: "2px 10px", borderRadius: 12,
+                backgroundColor: userRole === "operator" ? "var(--accent-subtle)" : "var(--bg-surface-2)",
+                color: userRole === "operator" ? "var(--accent)" : "var(--text-muted)",
+                border: "1px solid var(--border)", letterSpacing: "0.04em", textTransform: "uppercase" as const }}>
+                {userRole}
+              </span>
+            )}
             <button onClick={handleLogout} style={s.logoutBtn}>{t.dashboard.logout}</button>
           </div>
         </div>
@@ -1059,18 +1118,24 @@ export default function DashboardClient({ token, userName }: { token: string; us
             <button onClick={() => setTab("ingest")} style={tab === "ingest" ? s.tabActive : s.tabInactive}>
               {t.ingest.tab}
             </button>
-            <button onClick={() => { setTab("settings"); if (!settingsLoaded) fetchSettings(); }} style={tab === "settings" ? s.tabActive : s.tabInactive}>
-              {t.settings.tab}
-            </button>
-            <button onClick={() => { setTab("schema"); if (!schemaLoaded) fetchSchema(); }} style={tab === "schema" ? s.tabActive : s.tabInactive}>
-              {t.schema.tab}
-            </button>
+            {userRole === "admin" && (
+              <button onClick={() => { setTab("settings"); if (!settingsLoaded) fetchSettings(); }} style={tab === "settings" ? s.tabActive : s.tabInactive}>
+                {t.settings.tab}
+              </button>
+            )}
+            {userRole === "admin" && (
+              <button onClick={() => { setTab("schema"); if (!schemaLoaded) fetchSchema(); }} style={tab === "schema" ? s.tabActive : s.tabInactive}>
+                {t.schema.tab}
+              </button>
+            )}
             <button onClick={() => { setTab("audit"); if (!auditLogsLoaded) fetchAuditLogs(); }} style={tab === "audit" ? s.tabActive : s.tabInactive}>
               {t.audit.tab}
             </button>
-            <button onClick={() => setTab("subscription")} style={tab === "subscription" ? s.tabActive : s.tabInactive}>
-              {t.subscription.tab}
-            </button>
+            {userRole === "admin" && (
+              <button onClick={() => setTab("subscription")} style={tab === "subscription" ? s.tabActive : s.tabInactive}>
+                {t.subscription.tab}
+              </button>
+            )}
             {isSuperAdmin && (
               <button onClick={() => { setTab("admin" as never); if (!adminLoaded) fetchAdminData(); }} style={(tab as string) === "admin" ? s.tabActive : s.tabInactive}>
                 {t.admin.tab}
@@ -2130,6 +2195,81 @@ export default function DashboardClient({ token, userName }: { token: string; us
                 <button onClick={handleSaveWebhook} disabled={webhookLoading || !webhookUrl}
                   style={{ ...s.ingestBtn, opacity: webhookLoading || !webhookUrl ? 0.6 : 1 }}>
                   {webhookLoading ? t.settings.saving : t.settings.saveWebhook}
+                </button>
+              </div>
+            </div>
+
+            {/* ── Equipa ── */}
+            <div style={s.settingsCard}>
+              <p style={s.settingsTitle}>Equipa</p>
+              <p style={s.settingsDesc}>Gerencie quem acessa este tenant e com qual papel.</p>
+
+              {/* Role legend */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" as const }}>
+                {[
+                  { role: "admin",    color: "#6d28d9", bg: "#ede9fe", label: "Admin — acesso total" },
+                  { role: "operator", color: "var(--accent)", bg: "var(--accent-subtle)", label: "Operator — aprovar e ingerir" },
+                  { role: "viewer",   color: "var(--text-muted)", bg: "var(--bg-surface-2)", label: "Viewer — somente leitura" },
+                ].map(({ role, color, bg, label }) => (
+                  <span key={role} style={{ fontSize: "0.68rem", fontWeight: 700, padding: "3px 10px", borderRadius: 20, background: bg, color, border: "1px solid var(--border)", whiteSpace: "nowrap" as const }}>{label}</span>
+                ))}
+              </div>
+
+              {/* Members list */}
+              {!membersLoaded ? (
+                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: 12 }}>A carregar...</p>
+              ) : members.length === 0 ? (
+                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: 12 }}>Nenhum membro adicionado ainda. O proprietário da conta sempre tem papel admin.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+                  {members.map(m => (
+                    <div key={m.email} style={s.keyRow}>
+                      <div>
+                        <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>{m.email}</p>
+                        <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>Convidado por {m.invited_by || "—"}</p>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <select
+                          value={m.role}
+                          onChange={e => handleChangeMemberRole(m.email, e.target.value)}
+                          style={{ fontSize: "0.78rem", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 8px", background: "var(--bg-surface-2)", color: "var(--text-secondary)", cursor: "pointer" }}
+                        >
+                          <option value="admin">admin</option>
+                          <option value="operator">operator</option>
+                          <option value="viewer">viewer</option>
+                        </select>
+                        <button onClick={() => handleRemoveMember(m.email)} style={s.revokeBtn}>Remover</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Invite form */}
+              {memberError && <p style={{ fontSize: "0.78rem", color: "var(--danger)", marginBottom: 8 }}>{memberError}</p>}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const }}>
+                <input
+                  type="email"
+                  placeholder="email@empresa.com"
+                  value={newMember.email}
+                  onChange={e => setNewMember(p => ({ ...p, email: e.target.value }))}
+                  style={{ ...s.ingestInput, flex: 1, minWidth: 200 }}
+                />
+                <select
+                  value={newMember.role}
+                  onChange={e => setNewMember(p => ({ ...p, role: e.target.value }))}
+                  style={{ fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", background: "var(--bg-surface-2)", color: "var(--text-secondary)", cursor: "pointer" }}
+                >
+                  <option value="operator">operator</option>
+                  <option value="viewer">viewer</option>
+                  <option value="admin">admin</option>
+                </select>
+                <button
+                  onClick={handleAddMember}
+                  disabled={memberSaving || !newMember.email}
+                  style={{ ...s.ingestBtn, opacity: memberSaving || !newMember.email ? 0.6 : 1 }}
+                >
+                  {memberSaving ? "Adicionando..." : "Adicionar membro"}
                 </button>
               </div>
             </div>
