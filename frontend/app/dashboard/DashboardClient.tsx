@@ -151,6 +151,8 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [newMember,         setNewMember]         = useState({ email: "", role: "operator" });
   const [memberSaving,      setMemberSaving]      = useState(false);
   const [memberError,       setMemberError]       = useState("");
+  const [pendingApproval,   setPendingApproval]   = useState<{ name: string; email_hint: string; cpf_hint: string; operator_approved_by: string | null }[]>([]);
+  const [adminApproveLoading, setAdminApproveLoading] = useState<Record<string, boolean>>({});
 
   // ── Queue pagination ─────────────────────────────────────────────────────
   const QUEUE_PAGE_SIZE = 50;
@@ -196,11 +198,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
     finally { clearTimeout(wt); }
     // Now fetch data (server should be warm)
     try {
-      const [dbRes, qRes, profileRes, countRes] = await Promise.all([
-        apiFetch(`${API}/database`,        { headers: h }),
-        apiFetch(`${API}/review-queue`,    { headers: h }),
-        apiFetch(`${API}/admin/profile`,   { headers: h }),
-        apiFetch(`${API}/database/count`,  { headers: h }),
+      const [dbRes, qRes, profileRes, countRes, pendingRes] = await Promise.all([
+        apiFetch(`${API}/database`,           { headers: h }),
+        apiFetch(`${API}/review-queue`,       { headers: h }),
+        apiFetch(`${API}/admin/profile`,      { headers: h }),
+        apiFetch(`${API}/database/count`,     { headers: h }),
+        apiFetch(`${API}/pending-approval`,   { headers: h }),
       ]);
       if (profileRes.ok) {
         const prof = await profileRes.json();
@@ -217,6 +220,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
       else setError(`${t.dashboard.errApi} ${dbRes.status}.`);
       if (qRes.ok) setQueue(await qRes.json());
       if (countRes.ok) { const c = await countRes.json(); setDbTotal(c.count ?? null); }
+      if (pendingRes.ok) setPendingApproval(await pendingRes.json());
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError")
         setError(t.dashboard.errTimeout);
@@ -696,6 +700,18 @@ export default function DashboardClient({ token, userName }: { token: string; us
       fetchData();
     } catch { /* user can retry */ }
     finally { setApproveLoading(p => ({ ...p, [name]: false })); }
+  }
+
+  async function handleAdminApprove(name: string) {
+    setAdminApproveLoading(p => ({ ...p, [name]: true }));
+    const h = await getFreshHeaders();
+    if (!h) { router.push("/login"); return; }
+    try {
+      await apiFetch(`${API}/admin-approve/${encodeURIComponent(name)}`, { method: "POST", headers: h });
+      setPendingApproval(prev => prev.filter(r => r.name !== name));
+      fetchData();
+    } catch { /* user can retry */ }
+    finally { setAdminApproveLoading(p => ({ ...p, [name]: false })); }
   }
 
   async function handleGenerateKey() {
@@ -1420,6 +1436,51 @@ export default function DashboardClient({ token, userName }: { token: string; us
               </div>
             ))}
             </>
+            )}
+
+            {/* ── FOUR-EYES: admin sees operator pre-approved items ── */}
+            {userRole === "admin" && pendingApproval.length > 0 && (
+              <div style={{ marginTop: 24 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                  <span style={{ fontSize: "0.72rem", fontWeight: 700, padding: "3px 10px", borderRadius: 12,
+                    backgroundColor: "var(--warning-subtle, #fff7e6)", color: "var(--warning, #b45309)",
+                    border: "1px solid var(--warning, #b45309)", letterSpacing: "0.04em" }}>
+                    APROVAÇÃO FINAL
+                  </span>
+                  <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                    Aguardando carimbo do admin ({pendingApproval.length})
+                  </span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {pendingApproval.map(item => (
+                    <div key={item.name} style={{ ...s.alertCard, borderColor: "var(--warning, #b45309)", borderWidth: 1 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <p style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "0.92rem", marginBottom: 4 }}>
+                            {item.name}
+                          </p>
+                          <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                            {item.email_hint} · {item.cpf_hint}
+                            {item.operator_approved_by && (
+                              <span style={{ marginLeft: 8, color: "var(--accent)", fontWeight: 600 }}>
+                                pré-aprovado por {item.operator_approved_by}
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleAdminApprove(item.name)}
+                          disabled={adminApproveLoading[item.name]}
+                          style={{ ...s.ingestBtn, fontSize: "0.8rem", padding: "8px 16px", width: "auto",
+                            opacity: adminApproveLoading[item.name] ? 0.6 : 1 }}
+                        >
+                          {adminApproveLoading[item.name] ? "Aprovando..." : "✓ Aprovar definitivamente"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         ) : tab === "ingest" ? (
