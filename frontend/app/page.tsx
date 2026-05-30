@@ -125,7 +125,7 @@ const PLAN_META: Record<string, { displayName: string; desc: string; highlight: 
     displayName: "Enterprise",
     desc: "Para grandes volumes, SLA dedicado e deploys perimetrais on-premise.",
     highlight: false, cta: "Falar com Comercial", ctaHref: "mailto:vendas@bitzen.app",
-    features: ["Volume customizado e ilimitado", "Deploy perimetral (on-premise / VPC)", "SLA dedicado com suporte 24/7", "Integração SSO/SAML", "Relatório de conformidade ANPD", "Onboarding e treinamento dedicados"],
+    features: ["Volume customizado e ilimitado", "Deploy perimetral (on-premise / VPC)", "SLA dedicado com suporte 24/7", "Integração SSO/SAML", "Exportação RIPD em PDF (Art. 38 LGPD)", "Onboarding e treinamento dedicados"],
   },
 };
 
@@ -838,19 +838,35 @@ export default function LandingPage() {
                   }}>
                     {meta.desc}
                   </p>
-                  <Link
-                    href={meta.ctaHref}
-                    onClick={() => trackEvent("cta_click", { location: "pricing", plan: p.plan_name, label: meta.cta })}
-                    style={{
-                      display: "block", textAlign: "center", padding: "10px 0",
-                      backgroundColor: meta.highlight ? "#fff" : "var(--accent)",
-                      color: meta.highlight ? "var(--accent)" : "#fff",
-                      borderRadius: 10, textDecoration: "none",
-                      fontSize: "0.86rem", fontWeight: 700, marginBottom: 22,
-                    }}
-                  >
-                    {meta.cta}
-                  </Link>
+                  {meta.ctaHref.startsWith("mailto:") ? (
+                    <a
+                      href={meta.ctaHref}
+                      onClick={() => trackEvent("cta_click", { location: "pricing", plan: p.plan_name, label: meta.cta })}
+                      style={{
+                        display: "block", textAlign: "center", padding: "10px 0",
+                        backgroundColor: meta.highlight ? "#fff" : "var(--accent)",
+                        color: meta.highlight ? "var(--accent)" : "#fff",
+                        borderRadius: 10, textDecoration: "none",
+                        fontSize: "0.86rem", fontWeight: 700, marginBottom: 22,
+                      }}
+                    >
+                      {meta.cta}
+                    </a>
+                  ) : (
+                    <Link
+                      href={meta.ctaHref}
+                      onClick={() => trackEvent("cta_click", { location: "pricing", plan: p.plan_name, label: meta.cta })}
+                      style={{
+                        display: "block", textAlign: "center", padding: "10px 0",
+                        backgroundColor: meta.highlight ? "#fff" : "var(--accent)",
+                        color: meta.highlight ? "var(--accent)" : "#fff",
+                        borderRadius: 10, textDecoration: "none",
+                        fontSize: "0.86rem", fontWeight: 700, marginBottom: 22,
+                      }}
+                    >
+                      {meta.cta}
+                    </Link>
+                  )}
                   <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 9 }}>
                     {meta.features.map(f => (
                       <li key={f} style={{
