@@ -1,6 +1,7 @@
 anthropic
 fastapi
 uvicorn[standard]
+python-multipart
 streamlit
 requests
 pandas
@@ -9,4 +10,5 @@ PyJWT
 pytest
 httpx
 cryptography
+fpdf2
 stripe

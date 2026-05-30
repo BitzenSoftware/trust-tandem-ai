@@ -153,6 +153,7 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [memberError,       setMemberError]       = useState("");
   const [pendingApproval,   setPendingApproval]   = useState<{ name: string; email_hint: string; cpf_hint: string; operator_approved_by: string | null }[]>([]);
   const [adminApproveLoading, setAdminApproveLoading] = useState<Record<string, boolean>>({});
+  const [ripdLoading, setRipdLoading] = useState(false);
 
   // ── Queue pagination ─────────────────────────────────────────────────────
   const QUEUE_PAGE_SIZE = 50;
@@ -1090,6 +1091,25 @@ export default function DashboardClient({ token, userName }: { token: string; us
     );
   }
 
+  async function handleRipd() {
+    setRipdLoading(true);
+    const h = await getFreshHeaders();
+    if (!h) { setRipdLoading(false); return; }
+    try {
+      const res = await fetch(`${API}/ripd`, { headers: h });
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `RIPD_${new Date().toISOString().slice(0, 10)}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch { /* silent */ }
+    finally { setRipdLoading(false); }
+  }
+
   return (
     <div style={s.page}>
       {/* Header */}
@@ -1272,6 +1292,13 @@ export default function DashboardClient({ token, userName }: { token: string; us
                       style={{ padding: "6px 14px", fontSize: "0.8rem", fontWeight: 600, color: "var(--accent)", background: "none", border: "1px solid var(--accent)", borderRadius: 8, cursor: exportProgress ? "not-allowed" : "pointer", opacity: exportProgress ? 0.6 : 1 }}
                     >
                       ↓ {t.dashboard.exportCsv}
+                    </button>
+                    <button
+                      onClick={handleRipd}
+                      disabled={ripdLoading}
+                      style={{ padding: "6px 14px", fontSize: "0.8rem", fontWeight: 600, color: "#6366f1", background: "none", border: "1px solid #6366f1", borderRadius: 8, cursor: ripdLoading ? "not-allowed" : "pointer", opacity: ripdLoading ? 0.6 : 1 }}
+                    >
+                      {ripdLoading ? "..." : "↓ RIPD PDF"}
                     </button>
                   </div>
                 )}
