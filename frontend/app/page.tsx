@@ -118,13 +118,13 @@ const PLAN_META: Record<string, { displayName: string; desc: string; highlight: 
   professional: {
     displayName: "Professional",
     desc: "Para fintechs, seguradoras e mid-market com alto volume de registros recorrentes.",
-    highlight: true, cta: "Agendar Demonstração", ctaHref: "/register",
+    highlight: true, cta: "Agendar Demonstração", ctaHref: "mailto:demo@bitzen.app",
     features: ["Até 200.000 registros/mês", "Diagnósticos do Agente ilimitados", "Webhooks ilimitados com HMAC-SHA256", "20 API Keys por tenant", "Suporte prioritário por e-mail", "SLA 99,9% de uptime"],
   },
   enterprise: {
     displayName: "Enterprise",
     desc: "Para grandes volumes, SLA dedicado e deploys perimetrais on-premise.",
-    highlight: false, cta: "Falar com Comercial", ctaHref: "/register",
+    highlight: false, cta: "Falar com Comercial", ctaHref: "mailto:vendas@bitzen.app",
     features: ["Volume customizado e ilimitado", "Deploy perimetral (on-premise / VPC)", "SLA dedicado com suporte 24/7", "Integração SSO/SAML", "Relatório de conformidade ANPD", "Onboarding e treinamento dedicados"],
   },
 };
@@ -308,7 +308,7 @@ export default function LandingPage() {
               textTransform: "uppercase" as const, border: "1px solid var(--accent)",
               marginBottom: 24,
             }}>
-              <ShieldIcon size={11} /> Conformidade LGPD · Auditado pela ANPD
+              <ShieldIcon size={11} /> Conformidade LGPD · Aderente aos requisitos da ANPD
             </div>
 
             <h1 style={{
@@ -336,20 +336,20 @@ export default function LandingPage() {
             </p>
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <Link href="/register" onClick={() => trackEvent("cta_click", { location: "hero", label: "Agendar Demonstração" })} style={{
+              <a href="mailto:demo@bitzen.app" onClick={() => trackEvent("cta_click", { location: "hero", label: "Agendar Demonstração" })} style={{
                 padding: "13px 28px", backgroundColor: "var(--accent)", color: "#fff",
                 borderRadius: 10, textDecoration: "none", fontSize: "0.9rem", fontWeight: 700,
                 boxShadow: "0 4px 14px rgba(59,130,246,.35)",
               }}>
                 Agendar Demonstração →
-              </Link>
-              <Link href="/login" style={{
+              </a>
+              <Link href="/register" style={{
                 padding: "13px 28px", backgroundColor: "var(--bg-surface)",
                 color: "var(--text-primary)", borderRadius: 10, textDecoration: "none",
                 fontSize: "0.9rem", fontWeight: 600, border: "1px solid var(--border)",
                 boxShadow: "var(--shadow-sm)",
               }}>
-                Ver Documentação da API
+                Começar Trial Gratuito
               </Link>
             </div>
 
@@ -939,6 +939,7 @@ export default function LandingPage() {
                   { label: "Segurança Enterprise", href: "#enterprise" },
                   { label: "Planos e Preços", href: "#pricing" },
                   { label: "FAQ", href: "#faq" },
+                  { label: "Calculadora de Risco", href: "/roi" },
                   { label: "Documentação da API", href: "/login" },
                 ].map(l => (
                   <a key={l.label} href={l.href} style={{ fontSize: "0.83rem", color: "var(--text-secondary)", textDecoration: "none" }}>
@@ -957,14 +958,14 @@ export default function LandingPage() {
               </h4>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
-                  "Política de Privacidade",
-                  "Termos de Serviço",
-                  "LGPD — Art. 18 (DPA)",
-                  "Relatório de Conformidade ANPD",
+                  { label: "Política de Privacidade", href: "/privacy" },
+                  { label: "Termos de Serviço", href: "/terms" },
+                  { label: "DPA — Art. 18 LGPD", href: "/dpa" },
+                  { label: "Calculadora de Risco LGPD", href: "/roi" },
                 ].map(l => (
-                  <a key={l} href="#" style={{ fontSize: "0.83rem", color: "var(--text-secondary)", textDecoration: "none" }}>
-                    {l}
-                  </a>
+                  <Link key={l.label} href={l.href} style={{ fontSize: "0.83rem", color: "var(--text-secondary)", textDecoration: "none" }}>
+                    {l.label}
+                  </Link>
                 ))}
               </div>
             </div>
