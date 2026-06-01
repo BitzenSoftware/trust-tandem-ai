@@ -753,13 +753,16 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     finally { setTierCheckoutLoading(p => ({ ...p, [tierId]: false })); }
   }
 
-  async function handleSetupStripe() {
-    if (!confirm("Isso vai criar produtos e preços no Stripe para todos os tiers Enterprise sem price ID. Continuar?")) return;
+  async function handleSetupStripe(force = false) {
+    const msg = force
+      ? "Isso vai RECRIAR os preços no Stripe (arquiva os antigos, cria novos com os valores actuais). Assinaturas existentes não são afectadas. Continuar?"
+      : "Isso vai criar produtos e preços no Stripe para todos os tiers Enterprise sem price ID. Continuar?";
+    if (!confirm(msg)) return;
     setStripeSetupLoading(true); setStripeSetupResult(null);
     const h = await getFreshHeaders();
     if (!h) { setStripeSetupLoading(false); return; }
     try {
-      const res = await apiFetch(`${API}/admin/enterprise-tiers/setup-stripe`, { method: "POST", headers: h });
+      const res = await apiFetch(`${API}/admin/enterprise-tiers/setup-stripe?force=${force}`, { method: "POST", headers: h });
       if (res.ok) {
         const data = await res.json();
         setStripeSetupResult(data.results);
@@ -2242,10 +2245,16 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                     <div style={{ marginTop: 24 }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                         <p style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Sub-planos Enterprise</p>
-                        <button onClick={handleSetupStripe} disabled={stripeSetupLoading}
-                          style={{ ...s.diagnoseBtn, fontSize: "0.76rem", fontWeight: 700, opacity: stripeSetupLoading ? 0.6 : 1 }}>
-                          {stripeSetupLoading ? "A criar no Stripe..." : "⚡ Criar produtos no Stripe"}
-                        </button>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button onClick={() => handleSetupStripe(false)} disabled={stripeSetupLoading}
+                            style={{ ...s.diagnoseBtn, fontSize: "0.76rem", fontWeight: 700, opacity: stripeSetupLoading ? 0.6 : 1 }}>
+                            {stripeSetupLoading ? "A processar..." : "⚡ Criar no Stripe"}
+                          </button>
+                          <button onClick={() => handleSetupStripe(true)} disabled={stripeSetupLoading}
+                            style={{ ...s.diagnoseBtn, fontSize: "0.76rem", fontWeight: 600, opacity: stripeSetupLoading ? 0.6 : 1, color: "var(--warning, #b45309)" }}>
+                            🔄 Recriar preços
+                          </button>
+                        </div>
                       </div>
                       <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: 12 }}>
                         Clique em "Criar produtos no Stripe" para gerar automaticamente os produtos e preços. Depois edite os Price IDs manualmente se necessário.
