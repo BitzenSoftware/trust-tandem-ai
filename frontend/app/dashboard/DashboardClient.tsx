@@ -161,6 +161,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [editTierPrice,     setEditTierPrice]     = useState<Record<number, string>>({});
   const [tierPriceSaving,   setTierPriceSaving]   = useState<Record<number, boolean>>({});
   const [tierPriceSaved,    setTierPriceSaved]    = useState<Record<number, boolean>>({});
+  const [revealedTierPriceIds, setRevealedTierPriceIds] = useState<Record<number, boolean>>({});
+  const [copiedTierPriceId,    setCopiedTierPriceId]    = useState<Record<number, boolean>>({});
   const [stripeSetupLoading, setStripeSetupLoading] = useState(false);
   const [stripeSetupResult,  setStripeSetupResult]  = useState<{ id: number; name: string; status: string; price_id?: string; detail?: string }[] | null>(null);
 
@@ -2279,9 +2281,41 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>
                               <div>
                                 <label style={s.ingestLabel}>{tier.name} — R${tier.price_monthly.toLocaleString("pt-BR")}/mês</label>
-                                <input type="text" placeholder="price_xxx" style={s.ingestInput}
-                                  value={editTierPrice[tier.id] ?? ""}
-                                  onChange={e => setEditTierPrice(p => ({ ...p, [tier.id]: e.target.value }))} />
+                                {editTierPrice[tier.id] ? (
+                                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                    <span style={{ ...s.ingestInput, display: "flex", alignItems: "center",
+                                      fontFamily: "var(--font-geist-mono)", fontSize: "0.78rem",
+                                      letterSpacing: revealedTierPriceIds[tier.id] ? "normal" : "0.12em",
+                                      color: "var(--text-secondary)",
+                                      userSelect: revealedTierPriceIds[tier.id] ? "text" as const : "none" as const,
+                                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
+                                      {revealedTierPriceIds[tier.id] ? editTierPrice[tier.id] : "••••••••••••••••"}
+                                    </span>
+                                    <button type="button"
+                                      onClick={() => setRevealedTierPriceIds(p => ({ ...p, [tier.id]: !p[tier.id] }))}
+                                      style={s.diagnoseBtn}>
+                                      {revealedTierPriceIds[tier.id] ? t.admin.hide : t.admin.reveal}
+                                    </button>
+                                    <button type="button"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(editTierPrice[tier.id]);
+                                        setCopiedTierPriceId(p => ({ ...p, [tier.id]: true }));
+                                        setTimeout(() => setCopiedTierPriceId(p => ({ ...p, [tier.id]: false })), 2000);
+                                      }}
+                                      style={s.copyBtn}>
+                                      {copiedTierPriceId[tier.id] ? t.admin.copied : t.admin.copy}
+                                    </button>
+                                    <button type="button"
+                                      onClick={() => setEditTierPrice(p => ({ ...p, [tier.id]: "" }))}
+                                      style={{ ...s.diagnoseBtn, color: "var(--danger-text)" }}>
+                                      {t.admin.reveal === "Revelar" ? "Alterar" : "Change"}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <input type="text" placeholder="price_xxx" style={s.ingestInput}
+                                    value={editTierPrice[tier.id] ?? ""}
+                                    onChange={e => setEditTierPrice(p => ({ ...p, [tier.id]: e.target.value }))} />
+                                )}
                               </div>
                               <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", paddingBottom: 10 }}>
                                 {tier.records_per_month > 0 ? `${tier.records_per_month.toLocaleString("pt-BR")} registros` : "Ilimitado"} · {tier.api_keys_limit >= 999 ? "∞" : tier.api_keys_limit} API Keys
