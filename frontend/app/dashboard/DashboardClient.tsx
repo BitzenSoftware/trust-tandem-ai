@@ -1704,31 +1704,35 @@ export default function DashboardClient({ token: _token, userName }: { token: st
             ) : (
               <div style={s.card}>
                 <form onSubmit={e => { e.preventDefault(); submitIngestion([formRecord]); }} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  {/* name is always first */}
-                  <div>
-                    <label style={s.ingestLabel}>{t.ingest.fieldName}</label>
-                    <input required type="text" style={s.ingestInput} value={formRecord.name ?? ""} onChange={e => setFormRecord(p => ({ ...p, name: e.target.value }))} />
-                  </div>
-                  {/* dynamic schema fields */}
-                  {(schema.length > 0 ? schema : [
-                    { field_key: "email", label: t.ingest.fieldEmail, field_type: "email", required: true, position: 1, validation_rules: {} },
-                    { field_key: "cpf",   label: t.ingest.fieldCpf,   field_type: "cpf",   required: true, position: 2, validation_rules: {} },
-                  ]).map(f => (
-                    <div key={f.field_key}>
-                      <label style={s.ingestLabel}>{f.label}{f.required ? "" : " (opcional)"}</label>
-                      <input
-                        type={f.field_type === "email" ? "email" : f.field_type === "number" ? "number" : "text"}
-                        style={s.ingestInput}
-                        required={f.required}
-                        value={formRecord[f.field_key] ?? ""}
-                        placeholder={f.field_type === "cpf" ? "000.000.000-00 ou 00.000.000/0000-00" : ""}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                          const val = f.field_type === "cpf" ? formatCpfCnpj(e.target.value) : e.target.value;
-                          setFormRecord(p => ({ ...p, [f.field_key]: val }));
-                        }}
-                      />
+                  {/* scrollable fields area */}
+                  <div style={{ maxHeight: "420px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 14, paddingRight: 4 }}>
+                    {/* name is always first */}
+                    <div>
+                      <label style={s.ingestLabel}>{t.ingest.fieldName}</label>
+                      <input required type="text" style={s.ingestInput} value={formRecord.name ?? ""} onChange={e => setFormRecord(p => ({ ...p, name: e.target.value }))} />
                     </div>
-                  ))}
+                    {/* dynamic schema fields */}
+                    {(schema.length > 0 ? schema : [
+                      { field_key: "email", label: t.ingest.fieldEmail, field_type: "email", required: true, position: 1, validation_rules: {} },
+                      { field_key: "cpf",   label: t.ingest.fieldCpf,   field_type: "cpf",   required: true, position: 2, validation_rules: {} },
+                    ]).map(f => (
+                      <div key={f.field_key}>
+                        <label style={s.ingestLabel}>{f.label}{f.required ? "" : " (opcional)"}</label>
+                        <input
+                          type={f.field_type === "email" ? "email" : f.field_type === "number" ? "number" : "text"}
+                          style={s.ingestInput}
+                          required={f.required}
+                          value={formRecord[f.field_key] ?? ""}
+                          placeholder={f.field_type === "cpf" ? "000.000.000-00 ou 00.000.000/0000-00" : ""}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const val = f.field_type === "cpf" ? formatCpfCnpj(e.target.value) : e.target.value;
+                            setFormRecord(p => ({ ...p, [f.field_key]: val }));
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {/* submit always visible below scroll */}
                   <button type="submit" disabled={ingestLoading} style={{ ...s.ingestBtn, opacity: ingestLoading ? 0.6 : 1 }}>
                     {ingestLoading ? t.ingest.processing : t.ingest.submit}
                   </button>
