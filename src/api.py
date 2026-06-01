@@ -1533,9 +1533,17 @@ def actualizar_role_membro(workspace_id: int, email: str, role: str,
 @_router.delete("/workspaces/{workspace_id}/members/{email}", summary="Remove um membro de um workspace")
 def remover_membro_workspace(workspace_id: int, email: str,
                              tenant_id: str = Depends(_get_tenant_id)):
-    # TODO: Verificar que o utilizador é admin do workspace
     repository.remove_workspace_member(workspace_id, email)
     return {"status": "removed"}
+
+
+@_router.delete("/workspaces/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT,
+                summary="Elimina um workspace",
+                dependencies=[Depends(_require_admin)])
+def eliminar_workspace(workspace_id: int, tenant_id: str = Depends(_get_tenant_id)):
+    deleted = repository.delete_workspace(tenant_id, workspace_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Workspace não encontrado.")
 
 
 app.include_router(_router)

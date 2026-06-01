@@ -109,6 +109,10 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [addFieldError, setAddFieldError] = useState("");
   const [isSuperAdmin,  setIsSuperAdmin]  = useState(false);
   const [adminTab,      setAdminTab]      = useState<"plans" | "keys">("plans");
+  const [settingsTab,   setSettingsTab]   = useState<"integracoes" | "workspaces">("integracoes");
+  const [newWsName,     setNewWsName]     = useState("");
+  const [newWsDesc,     setNewWsDesc]     = useState("");
+  const [wsSaving,      setWsSaving]      = useState(false);
   const [planConfigs,   setPlanConfigs]   = useState<PlanConfig[]>([]);
   const [planSaving,    setPlanSaving]    = useState<Record<string, boolean>>({});
   const [planSaved,     setPlanSaved]     = useState<Record<string, boolean>>({});
@@ -2832,6 +2836,20 @@ export default function DashboardClient({ token: _token, userName }: { token: st
         ) : (
           /* ── SETTINGS ── */
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Sub-tabs */}
+            <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)" }}>
+              {([["integracoes", "Integrações"], ["workspaces", "Workspaces"]] as const).map(([key, label]) => (
+                <button key={key} onClick={() => setSettingsTab(key)}
+                  style={{ padding: "10px 20px", background: "none", border: "none", cursor: "pointer",
+                    fontSize: "0.88rem", fontWeight: 600,
+                    color: settingsTab === key ? "var(--accent)" : "var(--text-muted)",
+                    borderBottom: settingsTab === key ? "2px solid var(--accent)" : "2px solid transparent" }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {settingsTab === "integracoes" && <div style={{ display: "contents" }}>
             {/* API Keys */}
             <div style={s.settingsCard}>
               <p style={s.settingsTitle}>{t.settings.apiKeys}</p>
@@ -2917,6 +2935,105 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                 </button>
               </div>
             </div>
+            </div>}
+
+            {settingsTab === "workspaces" && (
+              <div style={s.settingsCard}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                  <div>
+                    <p style={s.settingsTitle}>Espaços de Trabalho</p>
+                    <p style={s.settingsDesc}>Organize os dados por áreas distintas dentro do tenant.</p>
+                  </div>
+                </div>
+
+                {/* Criar novo workspace */}
+                <div style={{ marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid var(--border)" }}>
+                  <p style={{ fontSize: "0.84rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 12 }}>Criar novo workspace</p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <input
+                      type="text"
+                      placeholder="Nome do workspace (ex: Comercial, RH, ...)"
+                      value={newWsName}
+                      onChange={e => setNewWsName(e.target.value)}
+                      style={{ ...s.ingestInput, width: "100%", boxSizing: "border-box" as const }}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Descrição (opcional)"
+                      value={newWsDesc}
+                      onChange={e => setNewWsDesc(e.target.value)}
+                      style={{ ...s.ingestInput, width: "100%", boxSizing: "border-box" as const }}
+                    />
+                    <button
+                      onClick={async () => {
+                        if (!newWsName.trim()) return;
+                        setWsSaving(true);
+                        const h = await getFreshHeaders();
+                        if (!h) { setWsSaving(false); return; }
+                        try {
+                          const res = await apiFetch(`${API}/workspaces`, {
+                            method: "POST", headers: h,
+                            body: JSON.stringify({ name: newWsName.trim(), description: newWsDesc.trim() }),
+                          });
+                          if (res.ok) {
+                            setNewWsName(""); setNewWsDesc("");
+                            const wsRes = await apiFetch(`${API}/workspaces`, { headers: h });
+                            if (wsRes.ok) setWorkspaces(await wsRes.json());
+                          }
+                        } catch { /* ignore */ }
+                        finally { setWsSaving(false); }
+                      }}
+                      disabled={wsSaving || !newWsName.trim()}
+                      style={{ ...s.ingestBtn, alignSelf: "flex-start", opacity: wsSaving || !newWsName.trim() ? 0.6 : 1 }}>
+                      {wsSaving ? "A criar..." : "Criar Workspace"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Lista de workspaces */}
+                <p style={{ fontSize: "0.84rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 12 }}>Workspaces existentes</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {/* Principal é sempre o primeiro */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "12px 14px", borderRadius: 8, backgroundColor: "var(--bg-surface-2)", border: "1px solid var(--border)" }}>
+                    <div>
+                      <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)" }}>Principal</p>
+                      <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>Workspace padrão do tenant</p>
+                    </div>
+                    <span style={{ fontSize: "0.68rem", fontWeight: 700, padding: "2px 10px", borderRadius: 20,
+                      background: "var(--accent-subtle)", color: "var(--accent)", border: "1px solid var(--border)" }}>
+                      padrão
+                    </span>
+                  </div>
+                  {workspaces.filter(ws => ws.name !== "Principal").map(ws => (
+                    <div key={ws.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "12px 14px", borderRadius: 8, backgroundColor: "var(--bg-surface-2)", border: "1px solid var(--border)" }}>
+                      <div>
+                        <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)" }}>{ws.name}</p>
+                        {ws.description && <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{ws.description}</p>}
+                      </div>
+                      <button
+                        onClick={async () => {
+                          if (!confirm(`Eliminar workspace "${ws.name}"? Esta acção não pode ser desfeita.`)) return;
+                          const h = await getFreshHeaders();
+                          if (!h) return;
+                          await apiFetch(`${API}/workspaces/${ws.id}`, { method: "DELETE", headers: h });
+                          setWorkspaces(prev => prev.filter(w => w.id !== ws.id));
+                          if (activeWorkspace === ws.id) setActiveWorkspace(null);
+                        }}
+                        style={s.revokeBtn}>
+                        Eliminar
+                      </button>
+                    </div>
+                  ))}
+                  {workspaces.filter(ws => ws.name !== "Principal").length === 0 && (
+                    <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", padding: "8px 0" }}>
+                      Nenhum workspace adicional criado ainda.
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
 
           </div>
         )}

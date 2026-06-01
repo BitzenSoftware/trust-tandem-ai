@@ -1437,6 +1437,20 @@ def create_workspace(tenant_id: str, name: str, description: str = "") -> dict:
     return {}
 
 
+def delete_workspace(tenant_id: str, workspace_id: int) -> bool:
+    """Deletes a workspace. Returns True if deleted."""
+    if USE_SUPABASE:
+        resp = _http.delete(
+            f"{_SUPABASE_URL}/rest/v1/workspaces",
+            params={"id": f"eq.{workspace_id}", "tenant_id": f"eq.{tenant_id}"},
+            headers={**_HEADERS, "Prefer": "return=representation"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return len(resp.json()) > 0
+    return False
+
+
 def get_workspace_members(workspace_id: int) -> list[dict]:
     """Returns all members of a workspace."""
     if USE_SUPABASE:
