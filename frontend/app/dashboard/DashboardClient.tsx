@@ -1976,10 +1976,10 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                 };
 
                 const rows: { label: string; vals: string[] }[] = [
-                  { label: "Registros/mês",            vals: [fmtRec(pl("starter")?.records_per_month ?? 0), fmtRec(pl("pro")?.records_per_month ?? 50000), fmtRec(pl("professional")?.records_per_month ?? 200000), "Ilimitado"] },
-                  { label: "API Keys",                 vals: [fmtKeys(pl("starter")?.api_keys_limit ?? 1), fmtKeys(pl("pro")?.api_keys_limit ?? 5), fmtKeys(pl("professional")?.api_keys_limit ?? 20), "Ilimitado"] },
-                  { label: "Diagnósticos/mês",         vals: [fmtDiag(pl("starter")?.diagnoses_per_month ?? 50), "Ilimitado", "Ilimitado", "Ilimitado"] },
-                  { label: t.subscription.fieldLimit,  vals: [String(pl("starter")?.field_limit ?? 5), String(pl("pro")?.field_limit ?? 15), String(pl("professional")?.field_limit ?? 20), "Ilimitado"] },
+                  { label: "Registros/mês",            vals: [fmtRec(pl("starter")?.records_per_month ?? 10000), fmtRec(pl("pro")?.records_per_month ?? 50000), fmtRec(pl("professional")?.records_per_month ?? 200000), "Personalizado"] },
+                  { label: "API Keys",                 vals: [fmtKeys(pl("starter")?.api_keys_limit ?? 1), fmtKeys(pl("pro")?.api_keys_limit ?? 5), fmtKeys(pl("professional")?.api_keys_limit ?? 20), "Personalizado"] },
+                  { label: "Diagnósticos/mês",         vals: [fmtDiag(pl("starter")?.diagnoses_per_month ?? 50), "Ilimitado", "Ilimitado", "Personalizado"] },
+                  { label: t.subscription.fieldLimit,  vals: [String(pl("starter")?.field_limit ?? 5), String(pl("pro")?.field_limit ?? 15), String(pl("professional")?.field_limit ?? 20), "Personalizado"] },
                   { label: t.subscription.feat_lgpd,   vals: ["✓", "✓", "✓", "✓"] },
                   { label: t.subscription.feat_fields, vals: ["✓", "✓", "✓", "✓"] },
                   { label: t.subscription.feat_webhook,vals: ["—", "✓", "✓", "✓"] },
