@@ -690,13 +690,16 @@ def purge_expired_queue(tenant_id: str | None = None, days: int = 30) -> int:
 
 # --- tenant_api_keys ---
 
-def create_api_key(tenant_id: str, label: str | None = None) -> tuple[str, int, str]:
+def create_api_key(tenant_id: str, label: str | None = None, workspace_id: int | None = None) -> tuple[str, int, str]:
     plain = _KEY_PREFIX + secrets.token_urlsafe(32)
     key_hash = hashlib.sha256(plain.encode()).hexdigest()
     if USE_SUPABASE:
+        payload = {"tenant_id": tenant_id, "key_hash": key_hash, "label": label}
+        if workspace_id is not None:
+            payload["workspace_id"] = workspace_id
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/tenant_api_keys",
-            json={"tenant_id": tenant_id, "key_hash": key_hash, "label": label},
+            json=payload,
             headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
         )
         resp.raise_for_status()
@@ -704,10 +707,16 @@ def create_api_key(tenant_id: str, label: str | None = None) -> tuple[str, int, 
         return plain, row["id"], row.get("created_at", "")
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(_DB_PATH) as conn:
-        cur = conn.execute(
-            "INSERT INTO tenant_api_keys (tenant_id, key_hash, label) VALUES (?, ?, ?)",
-            (tenant_id, key_hash, label),
-        )
+        if workspace_id is not None:
+            cur = conn.execute(
+                "INSERT INTO tenant_api_keys (tenant_id, workspace_id, key_hash, label) VALUES (?, ?, ?, ?)",
+                (tenant_id, workspace_id, key_hash, label),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO tenant_api_keys (tenant_id, key_hash, label) VALUES (?, ?, ?)",
+                (tenant_id, key_hash, label),
+            )
         return plain, cur.lastrowid, ""
 
 
@@ -733,11 +742,16 @@ def validate_api_key(plain_key: str) -> str | None:
     return None
 
 
-def list_api_keys(tenant_id: str) -> list[dict]:
+def list_api_keys(tenant_id: str, workspace_id: int | None = None) -> list[dict]:
     if USE_SUPABASE:
+        params: dict = {"select": "id,label,created_at", "tenant_id": f"eq.{tenant_id}", "order": "id.asc"}
+        if workspace_id is not None:
+            params["workspace_id"] = f"eq.{workspace_id}"
+        else:
+            params["workspace_id"] = "is.null"
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/tenant_api_keys",
-            params={"select": "id,label,created_at", "tenant_id": f"eq.{tenant_id}", "order": "id.asc"},
+            params=params,
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
@@ -745,38 +759,57 @@ def list_api_keys(tenant_id: str) -> list[dict]:
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
-            return [dict(r) for r in conn.execute(
-                "SELECT id, label, created_at FROM tenant_api_keys WHERE tenant_id = ? ORDER BY id",
-                (tenant_id,),
-            ).fetchall()]
+            if workspace_id is not None:
+                return [dict(r) for r in conn.execute(
+                    "SELECT id, label, created_at FROM tenant_api_keys WHERE tenant_id = ? AND workspace_id = ? ORDER BY id",
+                    (tenant_id, workspace_id),
+                ).fetchall()]
+            else:
+                return [dict(r) for r in conn.execute(
+                    "SELECT id, label, created_at FROM tenant_api_keys WHERE tenant_id = ? AND workspace_id IS NULL ORDER BY id",
+                    (tenant_id,),
+                ).fetchall()]
     return []
 
 
-def revoke_api_key(key_id: int, tenant_id: str) -> int:
+def revoke_api_key(key_id: int, tenant_id: str, workspace_id: int | None = None) -> int:
     if USE_SUPABASE:
+        params: dict = {"id": f"eq.{key_id}", "tenant_id": f"eq.{tenant_id}"}
+        if workspace_id is not None:
+            params["workspace_id"] = f"eq.{workspace_id}"
+        else:
+            params["workspace_id"] = "is.null"
         resp = _http.delete(
             f"{_SUPABASE_URL}/rest/v1/tenant_api_keys",
-            params={"id": f"eq.{key_id}", "tenant_id": f"eq.{tenant_id}"},
+            params=params,
             headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
         )
         resp.raise_for_status()
         return len(resp.json())
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
-            return conn.execute(
-                "DELETE FROM tenant_api_keys WHERE id = ? AND tenant_id = ?", (key_id, tenant_id)
-            ).rowcount
+            if workspace_id is not None:
+                return conn.execute(
+                    "DELETE FROM tenant_api_keys WHERE id = ? AND tenant_id = ? AND workspace_id = ?", (key_id, tenant_id, workspace_id)
+                ).rowcount
+            else:
+                return conn.execute(
+                    "DELETE FROM tenant_api_keys WHERE id = ? AND tenant_id = ? AND workspace_id IS NULL", (key_id, tenant_id)
+                ).rowcount
     return 0
 
 
 # --- tenant_webhooks ---
 
-def save_webhook(tenant_id: str, url: str) -> str:
+def save_webhook(tenant_id: str, url: str, workspace_id: int | None = None) -> str:
     secret = secrets.token_hex(32)
     if USE_SUPABASE:
+        payload = {"tenant_id": tenant_id, "url": url, "secret": secret, "active": True}
+        if workspace_id is not None:
+            payload["workspace_id"] = workspace_id
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/tenant_webhooks",
-            json={"tenant_id": tenant_id, "url": url, "secret": secret, "active": True},
+            json=payload,
             headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
             params={"on_conflict": "tenant_id"}, timeout=10,
         )
@@ -784,19 +817,31 @@ def save_webhook(tenant_id: str, url: str) -> str:
         return secret
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(_DB_PATH) as conn:
-        conn.execute(
-            "INSERT INTO tenant_webhooks (tenant_id, url, secret, active) VALUES (?, ?, ?, 1) "
-            "ON CONFLICT(tenant_id) DO UPDATE SET url=excluded.url, secret=excluded.secret, active=1",
-            (tenant_id, url, secret),
-        )
+        if workspace_id is not None:
+            conn.execute(
+                "INSERT INTO tenant_webhooks (tenant_id, workspace_id, url, secret, active) VALUES (?, ?, ?, ?, 1) "
+                "ON CONFLICT(tenant_id) DO UPDATE SET url=excluded.url, secret=excluded.secret, active=1",
+                (tenant_id, workspace_id, url, secret),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO tenant_webhooks (tenant_id, url, secret, active) VALUES (?, ?, ?, 1) "
+                "ON CONFLICT(tenant_id) DO UPDATE SET url=excluded.url, secret=excluded.secret, active=1",
+                (tenant_id, url, secret),
+            )
     return secret
 
 
-def get_webhook(tenant_id: str) -> dict | None:
+def get_webhook(tenant_id: str, workspace_id: int | None = None) -> dict | None:
     if USE_SUPABASE:
+        params: dict = {"select": "url,secret,active", "tenant_id": f"eq.{tenant_id}"}
+        if workspace_id is not None:
+            params["workspace_id"] = f"eq.{workspace_id}"
+        else:
+            params["workspace_id"] = "is.null"
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/tenant_webhooks",
-            params={"select": "url,secret,active", "tenant_id": f"eq.{tenant_id}"},
+            params=params,
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
@@ -805,18 +850,28 @@ def get_webhook(tenant_id: str) -> dict | None:
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT url, secret, active FROM tenant_webhooks WHERE tenant_id = ?", (tenant_id,)
-            ).fetchone()
+            if workspace_id is not None:
+                row = conn.execute(
+                    "SELECT url, secret, active FROM tenant_webhooks WHERE tenant_id = ? AND workspace_id = ?", (tenant_id, workspace_id)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT url, secret, active FROM tenant_webhooks WHERE tenant_id = ? AND workspace_id IS NULL", (tenant_id,)
+                ).fetchone()
             return dict(row) if row else None
     return None
 
 
-def delete_webhook(tenant_id: str) -> None:
+def delete_webhook(tenant_id: str, workspace_id: int | None = None) -> None:
     if USE_SUPABASE:
+        params: dict = {"tenant_id": f"eq.{tenant_id}"}
+        if workspace_id is not None:
+            params["workspace_id"] = f"eq.{workspace_id}"
+        else:
+            params["workspace_id"] = "is.null"
         _http.delete(
             f"{_SUPABASE_URL}/rest/v1/tenant_webhooks",
-            params={"tenant_id": f"eq.{tenant_id}"},
+            params=params,
             headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10,
         ).raise_for_status()
         return
