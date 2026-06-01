@@ -1474,7 +1474,19 @@ def setup_enterprise_tiers_stripe(force: bool = False):
 
 @_router.get("/workspaces", summary="Lista todos os workspaces do tenant")
 def listar_workspaces(tenant_id: str = Depends(_get_tenant_id)):
-    return repository.get_workspaces(tenant_id)
+    workspaces = repository.get_workspaces(tenant_id)
+    # Phase 2: Auto-create Principal workspace if none exist
+    if not workspaces or len(workspaces) == 0:
+        try:
+            principal = repository.create_workspace(
+                tenant_id,
+                name="Principal",
+                description="Workspace padrão do tenant"
+            )
+            return [principal]
+        except Exception:
+            pass
+    return workspaces
 
 
 @_router.post("/workspaces", status_code=status.HTTP_201_CREATED,
