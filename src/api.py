@@ -261,6 +261,16 @@ def _get_operator_email(
     return "system"
 
 
+def _get_user_id(
+    creds: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> str:
+    """Extract user ID (email) from JWT token."""
+    if creds:
+        email = _decode_jwt_email(creds.credentials)
+        return email or "anonymous"
+    raise HTTPException(status_code=401, detail="Authentication required.")
+
+
 def _require_super_admin(tenant_id: str = Depends(_get_tenant_id)) -> str:
     if tenant_id != "__admin__":
         raise HTTPException(status_code=403, detail="Acesso restrito ao super administrador.")
