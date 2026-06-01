@@ -171,6 +171,12 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [addUserWorkspace,  setAddUserWorkspace]  = useState<number | null>(null);
   const [addUserAccesses,   setAddUserAccesses]   = useState<string[]>(["dashboard", "review", "ingest", "compliance"]);
   const [addUserSaving,     setAddUserSaving]     = useState(false);
+  // Edit user modal
+  const [editUserTarget,   setEditUserTarget]   = useState<{ email: string; role: string } | null>(null);
+  const [editUserRole,     setEditUserRole]     = useState("operator");
+  const [editUserWorkspace,setEditUserWorkspace]= useState<number | null>(null);
+  const [editUserAccesses, setEditUserAccesses] = useState<string[]>([]);
+  const [editUserSaving,   setEditUserSaving]   = useState(false);
   const [pendingApproval,   setPendingApproval]   = useState<{ name: string; email_hint: string; cpf_hint: string; operator_approved_by: string | null }[]>([]);
   const [adminApproveLoading, setAdminApproveLoading] = useState<Record<string, boolean>>({});
   const [showTierModal,     setShowTierModal]     = useState(false);
@@ -2325,7 +2331,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                 return (
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                     {allRows.map(m => (
-                      <div key={m.email} style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px 80px",
+                      <div key={m.email} style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px 1fr",
                         gap: 8, alignItems: "center", padding: "10px 12px", borderRadius: 8,
                         backgroundColor: "var(--bg-surface-2)", border: "1px solid var(--border)" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -2346,10 +2352,21 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                         <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
                           {activeWorkspace ? (workspaces.find(w => w.id === activeWorkspace)?.name ?? "—") : "Principal"}
                         </span>
-                        {!m.isOwner
-                          ? <button onClick={() => handleRemoveMember(m.email)} style={s.revokeBtn}>Remover</button>
-                          : <span />
-                        }
+                        {!m.isOwner ? (
+                          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                            <button
+                              onClick={() => {
+                                setEditUserTarget({ email: m.email, role: m.role });
+                                setEditUserRole(m.role);
+                                setEditUserWorkspace(activeWorkspace);
+                                setEditUserAccesses(DEFAULT_ACCESSES[m.role] ?? DEFAULT_ACCESSES["operator"]);
+                              }}
+                              style={{ ...s.diagnoseBtn, fontSize: "0.75rem", padding: "4px 10px" }}>
+                              Editar
+                            </button>
+                            <button onClick={() => handleRemoveMember(m.email)} style={s.revokeBtn}>Remover</button>
+                          </div>
+                        ) : <span />}
                       </div>
                     ))}
                   </div>
@@ -2453,6 +2470,122 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                     <button onClick={handleAddUserSubmit} disabled={addUserSaving || !addUserEmail}
                       style={{ ...s.ingestBtn, padding: "9px 24px", opacity: addUserSaving || !addUserEmail ? 0.6 : 1 }}>
                       {addUserSaving ? "A guardar..." : "Guardar"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Modal Editar Utilizador ── */}
+            {editUserTarget && (
+              <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 1001,
+                display: "flex", alignItems: "center", justifyContent: "center" }}
+                onClick={e => { if (e.target === e.currentTarget) setEditUserTarget(null); }}>
+                <div style={{ backgroundColor: "var(--bg-surface)", borderRadius: 16, width: "100%", maxWidth: 540,
+                  boxShadow: "0 20px 60px rgba(0,0,0,0.3)", border: "1px solid var(--border)", overflow: "hidden" }}>
+
+                  {/* Header */}
+                  <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 2 }}>Editar Utilizador</h3>
+                      <p style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>{editUserTarget.email}</p>
+                    </div>
+                    <button onClick={() => setEditUserTarget(null)}
+                      style={{ background: "none", border: "none", fontSize: "1.2rem", cursor: "pointer", color: "var(--text-muted)", lineHeight: 1 }}>✕</button>
+                  </div>
+
+                  {/* Tabs */}
+                  <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 24px" }}>
+                    {(["utilizador", "area", "acessos"] as const).map(t => (
+                      <button key={t} onClick={() => setAddUserTab(t)}
+                        style={{ padding: "12px 16px", background: "none", border: "none", cursor: "pointer", fontSize: "0.84rem", fontWeight: 600,
+                          color: addUserTab === t ? "var(--accent)" : "var(--text-muted)",
+                          borderBottom: addUserTab === t ? "2px solid var(--accent)" : "2px solid transparent",
+                          textTransform: "capitalize" as const }}>
+                        {t === "utilizador" ? "Utilizador" : t === "area" ? "Área" : "Acessos"}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Body */}
+                  <div style={{ padding: "24px" }}>
+                    {addUserTab === "utilizador" && (
+                      <div>
+                        <label style={{ ...s.ingestLabel, display: "block", marginBottom: 6 }}>Papel</label>
+                        <select value={editUserRole}
+                          onChange={e => { setEditUserRole(e.target.value); setEditUserAccesses(DEFAULT_ACCESSES[e.target.value] ?? []); }}
+                          style={{ ...s.ingestInput, width: "100%", boxSizing: "border-box" as const }}>
+                          <option value="admin">Admin — acesso total</option>
+                          <option value="operator">Operator — aprovar e ingerir</option>
+                          <option value="viewer">Viewer — somente leitura</option>
+                        </select>
+                      </div>
+                    )}
+                    {addUserTab === "area" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                        <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginBottom: 4 }}>Seleccione a área (workspace) deste utilizador.</p>
+                        {[{ id: null, name: "Principal" }, ...workspaces.filter(w => w.name !== "Principal")].map(ws => (
+                          <label key={ws.id ?? "principal"} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
+                            borderRadius: 10, border: `1px solid ${editUserWorkspace === ws.id ? "var(--accent)" : "var(--border)"}`,
+                            backgroundColor: editUserWorkspace === ws.id ? "var(--accent-subtle)" : "var(--bg-surface-2)", cursor: "pointer" }}>
+                            <input type="radio" name="edit-workspace" checked={editUserWorkspace === ws.id}
+                              onChange={() => setEditUserWorkspace(ws.id)}
+                              style={{ accentColor: "var(--accent)" }} />
+                            <span style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)" }}>{ws.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {addUserTab === "acessos" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginBottom: 4 }}>
+                          Menus a que este utilizador tem acesso.
+                        </p>
+                        {USER_MENUS.map(menu => (
+                          <label key={menu.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px",
+                            borderRadius: 8, border: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", cursor: "pointer" }}>
+                            <input type="checkbox" checked={editUserAccesses.includes(menu.key)}
+                              onChange={e => setEditUserAccesses(prev =>
+                                e.target.checked ? [...prev, menu.key] : prev.filter(k => k !== menu.key)
+                              )}
+                              style={{ accentColor: "var(--accent)", width: 16, height: 16 }} />
+                            <span style={{ fontSize: "0.88rem", color: "var(--text-primary)", fontWeight: 500 }}>{menu.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Footer */}
+                  <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                    <button onClick={() => setEditUserTarget(null)}
+                      style={{ padding: "9px 20px", borderRadius: 10, border: "1px solid var(--border)", background: "none",
+                        color: "var(--text-secondary)", fontSize: "0.84rem", cursor: "pointer" }}>
+                      Cancelar
+                    </button>
+                    <button
+                      disabled={editUserSaving}
+                      onClick={async () => {
+                        if (!editUserTarget) return;
+                        setEditUserSaving(true);
+                        const h = await getFreshHeaders();
+                        if (h) {
+                          const res = await apiFetch(`${API}/members/${encodeURIComponent(editUserTarget.email)}`, {
+                            method: "PATCH", headers: h,
+                            body: JSON.stringify({ email: editUserTarget.email, role: editUserRole }),
+                          });
+                          if (res.ok) {
+                            setMembers(prev => prev.map(m =>
+                              m.email === editUserTarget.email ? { ...m, role: editUserRole } : m
+                            ));
+                            setEditUserTarget(null);
+                            setAddUserTab("utilizador");
+                          }
+                        }
+                        setEditUserSaving(false);
+                      }}
+                      style={{ ...s.ingestBtn, padding: "9px 24px", opacity: editUserSaving ? 0.6 : 1 }}>
+                      {editUserSaving ? "A guardar..." : "Guardar"}
                     </button>
                   </div>
                 </div>
