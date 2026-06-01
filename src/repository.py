@@ -1108,36 +1108,56 @@ def delete_field_schema(tenant_id: str, field_key: str) -> int:
 
 # --- admin_plan_configs ---
 
+_PLAN_DEFAULTS: list[dict] = [
+    {"plan_name": "starter",      "field_limit": 5,   "price_monthly": 0.0,    "stripe_price_id": None, "records_per_month": 0,      "api_keys_limit": 1,   "diagnoses_per_month": 50},
+    {"plan_name": "pro",          "field_limit": 15,  "price_monthly": 497.0,  "stripe_price_id": None, "records_per_month": 50000,  "api_keys_limit": 5,   "diagnoses_per_month": 0},
+    {"plan_name": "professional", "field_limit": 20,  "price_monthly": 1490.0, "stripe_price_id": None, "records_per_month": 200000, "api_keys_limit": 20,  "diagnoses_per_month": 0},
+    {"plan_name": "enterprise",   "field_limit": 999, "price_monthly": 0.0,    "stripe_price_id": None, "records_per_month": 0,      "api_keys_limit": 999, "diagnoses_per_month": 0},
+]
+
+
 def get_plan_configs() -> list[dict]:
-    defaults = [
-        {"plan_name": "starter",      "field_limit": PLAN_LIMITS["starter"],      "price_monthly": 0.0,    "stripe_price_id": None},
-        {"plan_name": "pro",          "field_limit": PLAN_LIMITS["pro"],          "price_monthly": 497.0,  "stripe_price_id": None},
-        {"plan_name": "professional", "field_limit": PLAN_LIMITS["professional"], "price_monthly": 1490.0, "stripe_price_id": None},
-        {"plan_name": "enterprise",   "field_limit": PLAN_LIMITS["enterprise"],   "price_monthly": 0.0,    "stripe_price_id": None},
-    ]
     if USE_SUPABASE:
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/admin_plan_configs",
-            params={"select": "plan_name,field_limit,price_monthly,stripe_price_id", "order": "plan_name.asc"},
+            params={"select": "plan_name,field_limit,price_monthly,stripe_price_id,records_per_month,api_keys_limit,diagnoses_per_month",
+                    "order": "plan_name.asc"},
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
         rows = resp.json()
-        return rows if rows else defaults
-    return defaults
+        return rows if rows else _PLAN_DEFAULTS
+    return _PLAN_DEFAULTS
 
 
-def upsert_plan_config(plan_name: str, field_limit: int, price_monthly: float, stripe_price_id: str | None) -> None:
+def upsert_plan_config(
+    plan_name: str, field_limit: int, price_monthly: float, stripe_price_id: str | None,
+    records_per_month: int = 0, api_keys_limit: int = 1, diagnoses_per_month: int = 0,
+) -> None:
     PLAN_LIMITS[plan_name] = field_limit
     if USE_SUPABASE:
         _http.post(
             f"{_SUPABASE_URL}/rest/v1/admin_plan_configs",
             json={"plan_name": plan_name, "field_limit": field_limit,
                   "price_monthly": price_monthly, "stripe_price_id": stripe_price_id,
+                  "records_per_month": records_per_month, "api_keys_limit": api_keys_limit,
+                  "diagnoses_per_month": diagnoses_per_month,
                   "updated_at": datetime.now(timezone.utc).isoformat()},
             headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
             params={"on_conflict": "plan_name"}, timeout=10,
         ).raise_for_status()
+
+
+def get_plan_limits(plan_name: str) -> dict:
+    """Returns all limits for a given plan."""
+    configs = get_plan_configs()
+    cfg = next((c for c in configs if c["plan_name"] == plan_name), None)
+    if cfg:
+        return {"field_limit": cfg.get("field_limit", 5), "records_per_month": cfg.get("records_per_month", 0),
+                "api_keys_limit": cfg.get("api_keys_limit", 1), "diagnoses_per_month": cfg.get("diagnoses_per_month", 0)}
+    defaults = next((d for d in _PLAN_DEFAULTS if d["plan_name"] == plan_name), _PLAN_DEFAULTS[0])
+    return {"field_limit": defaults["field_limit"], "records_per_month": defaults["records_per_month"],
+            "api_keys_limit": defaults["api_keys_limit"], "diagnoses_per_month": defaults["diagnoses_per_month"]}
 
 
 def get_plan_field_limit(plan_name: str) -> int:
