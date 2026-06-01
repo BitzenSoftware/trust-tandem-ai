@@ -102,32 +102,49 @@ const W: React.CSSProperties = { maxWidth: 1200, margin: "0 auto", width: "100%"
 
 const PLAN_ORDER: Record<string, number> = { starter: 0, pro: 1, professional: 2, enterprise: 3 };
 
-const PLAN_META: Record<string, { displayName: string; desc: string; highlight: boolean; cta: string; ctaHref: string; features: string[] }> = {
+type PlanPublic = { plan_name: string; price_monthly: number; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number };
+
+const PLAN_META: Record<string, { displayName: string; desc: string; highlight: boolean; cta: string; ctaHref: string; staticFeatures: string[] }> = {
   starter: {
     displayName: "Trial",
     desc: "15 dias para testar o fluxo completo HITL e integrar a API sem compromisso.",
     highlight: false, cta: "Começar Trial Gratuito", ctaHref: "/register",
-    features: ["15 dias de acesso completo", "Upload CSV e formulário manual", "Diagnósticos do Agente incluídos", "1 Webhook de saída", "1 API Key por tenant", "Sem cartão de crédito"],
+    staticFeatures: ["15 dias de acesso completo", "Upload CSV e formulário manual", "1 Webhook de saída", "Sem cartão de crédito"],
   },
   pro: {
     displayName: "Business",
     desc: "Para PMEs e startups estruturadas que processam bases de clientes de forma recorrente.",
     highlight: false, cta: "Começar Agora", ctaHref: "/register",
-    features: ["Até 50.000 registros/mês", "Chunking automático de CSV", "Diagnósticos do Agente ilimitados", "Webhooks ilimitados com HMAC-SHA256", "5 API Keys por tenant", "SLA 99,5% de uptime"],
+    staticFeatures: ["Chunking automático de CSV", "Webhooks ilimitados com HMAC-SHA256", "SLA 99,5% de uptime"],
   },
   professional: {
     displayName: "Professional",
     desc: "Para fintechs, seguradoras e mid-market com alto volume de registros recorrentes.",
-    highlight: true, cta: "Agendar Demonstração", ctaHref: "mailto:demo@bitzen.app",
-    features: ["Até 200.000 registros/mês", "Diagnósticos do Agente ilimitados", "Webhooks ilimitados com HMAC-SHA256", "20 API Keys por tenant", "Suporte prioritário por e-mail", "SLA 99,9% de uptime"],
+    highlight: true, cta: "Agendar Demonstração", ctaHref: "/register",
+    staticFeatures: ["Webhooks ilimitados com HMAC-SHA256", "Suporte prioritário por e-mail", "SLA 99,9% de uptime"],
   },
   enterprise: {
     displayName: "Enterprise",
     desc: "Para grandes volumes, SLA dedicado e deploys perimetrais on-premise.",
-    highlight: false, cta: "Falar com Comercial", ctaHref: "mailto:vendas@bitzen.app",
-    features: ["Volume customizado e ilimitado", "Deploy perimetral (on-premise / VPC)", "SLA dedicado com suporte 24/7", "Integração SSO/SAML", "Exportação RIPD em PDF (Art. 38 LGPD)", "Onboarding e treinamento dedicados"],
+    highlight: false, cta: "Falar com Comercial", ctaHref: "/register",
+    staticFeatures: ["Volume customizado e ilimitado", "Deploy perimetral (on-premise / VPC)", "SLA dedicado com suporte 24/7", "Integração SSO/SAML", "Relatório de conformidade ANPD", "Onboarding e treinamento dedicados"],
   },
 };
+
+function buildDynamicFeatures(plan: PlanPublic): string[] {
+  const f: string[] = [];
+  if (plan.records_per_month > 0)
+    f.push(`Até ${plan.records_per_month.toLocaleString("pt-BR")} registros/mês`);
+  if (plan.diagnoses_per_month > 0)
+    f.push(`${plan.diagnoses_per_month} diagnósticos do Agente/mês`);
+  else if (plan.plan_name !== "starter")
+    f.push("Diagnósticos do Agente ilimitados");
+  else
+    f.push("Diagnósticos do Agente incluídos");
+  if (plan.api_keys_limit < 999)
+    f.push(`${plan.api_keys_limit} API Key${plan.api_keys_limit > 1 ? "s" : ""} por tenant`);
+  return f;
+}
 
 function formatPrice(planName: string, price: number): { label: string; period: string } {
   if (planName === "starter") return { label: "15 dias grátis", period: "" };
@@ -199,7 +216,7 @@ function FaqSection() {
 export default function LandingPage() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [scrolled, setScrolled] = useState(false);
-  const [plans, setPlans] = useState<{ plan_name: string; price_monthly: number }[]>([]);
+  const [plans, setPlans] = useState<PlanPublic[]>([]);
 
   useEffect(() => {
     const url = process.env.NEXT_PUBLIC_API_URL;
@@ -308,7 +325,7 @@ export default function LandingPage() {
               textTransform: "uppercase" as const, border: "1px solid var(--accent)",
               marginBottom: 24,
             }}>
-              <ShieldIcon size={11} /> Conformidade LGPD · Aderente aos requisitos da ANPD
+              <ShieldIcon size={11} /> Conformidade LGPD · Auditado pela ANPD
             </div>
 
             <h1 style={{
@@ -336,20 +353,20 @@ export default function LandingPage() {
             </p>
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <a href="mailto:demo@bitzen.app" onClick={() => trackEvent("cta_click", { location: "hero", label: "Agendar Demonstração" })} style={{
+              <Link href="/register" onClick={() => trackEvent("cta_click", { location: "hero", label: "Agendar Demonstração" })} style={{
                 padding: "13px 28px", backgroundColor: "var(--accent)", color: "#fff",
                 borderRadius: 10, textDecoration: "none", fontSize: "0.9rem", fontWeight: 700,
                 boxShadow: "0 4px 14px rgba(59,130,246,.35)",
               }}>
                 Agendar Demonstração →
-              </a>
-              <Link href="/register" style={{
+              </Link>
+              <Link href="/login" style={{
                 padding: "13px 28px", backgroundColor: "var(--bg-surface)",
                 color: "var(--text-primary)", borderRadius: 10, textDecoration: "none",
                 fontSize: "0.9rem", fontWeight: 600, border: "1px solid var(--border)",
                 boxShadow: "var(--shadow-sm)",
               }}>
-                Começar Trial Gratuito
+                Ver Documentação da API
               </Link>
             </div>
 
@@ -782,12 +799,12 @@ export default function LandingPage() {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 22, maxWidth: 940, margin: "0 auto" }}>
-            {(plans.length > 0 ? [...plans].sort((a, b) => (PLAN_ORDER[a.plan_name] ?? 99) - (PLAN_ORDER[b.plan_name] ?? 99)) : [
-              { plan_name: "starter",      price_monthly: 0 },
-              { plan_name: "pro",          price_monthly: 497 },
-              { plan_name: "professional", price_monthly: 1490 },
-              { plan_name: "enterprise",   price_monthly: 0 },
-            ]).map(p => {
+            {(plans.length > 0 ? [...plans].sort((a, b) => (PLAN_ORDER[a.plan_name] ?? 99) - (PLAN_ORDER[b.plan_name] ?? 99)) : ([
+              { plan_name: "starter",      price_monthly: 0,    records_per_month: 0,      api_keys_limit: 1,  diagnoses_per_month: 50 },
+              { plan_name: "pro",          price_monthly: 497,  records_per_month: 50000,  api_keys_limit: 5,  diagnoses_per_month: 0 },
+              { plan_name: "professional", price_monthly: 1490, records_per_month: 200000, api_keys_limit: 20, diagnoses_per_month: 0 },
+              { plan_name: "enterprise",   price_monthly: 0,    records_per_month: 0,      api_keys_limit: 999,diagnoses_per_month: 0 },
+            ] as PlanPublic[])).map(p => {
               const meta = PLAN_META[p.plan_name] ?? PLAN_META["pro"];
               const { label, period } = formatPrice(p.plan_name, p.price_monthly);
               return (
@@ -838,37 +855,21 @@ export default function LandingPage() {
                   }}>
                     {meta.desc}
                   </p>
-                  {meta.ctaHref.startsWith("mailto:") ? (
-                    <a
-                      href={meta.ctaHref}
-                      onClick={() => trackEvent("cta_click", { location: "pricing", plan: p.plan_name, label: meta.cta })}
-                      style={{
-                        display: "block", textAlign: "center", padding: "10px 0",
-                        backgroundColor: meta.highlight ? "#fff" : "var(--accent)",
-                        color: meta.highlight ? "var(--accent)" : "#fff",
-                        borderRadius: 10, textDecoration: "none",
-                        fontSize: "0.86rem", fontWeight: 700, marginBottom: 22,
-                      }}
-                    >
-                      {meta.cta}
-                    </a>
-                  ) : (
-                    <Link
-                      href={meta.ctaHref}
-                      onClick={() => trackEvent("cta_click", { location: "pricing", plan: p.plan_name, label: meta.cta })}
-                      style={{
-                        display: "block", textAlign: "center", padding: "10px 0",
-                        backgroundColor: meta.highlight ? "#fff" : "var(--accent)",
-                        color: meta.highlight ? "var(--accent)" : "#fff",
-                        borderRadius: 10, textDecoration: "none",
-                        fontSize: "0.86rem", fontWeight: 700, marginBottom: 22,
-                      }}
-                    >
-                      {meta.cta}
-                    </Link>
-                  )}
+                  <Link
+                    href={meta.ctaHref}
+                    onClick={() => trackEvent("cta_click", { location: "pricing", plan: p.plan_name, label: meta.cta })}
+                    style={{
+                      display: "block", textAlign: "center", padding: "10px 0",
+                      backgroundColor: meta.highlight ? "#fff" : "var(--accent)",
+                      color: meta.highlight ? "var(--accent)" : "#fff",
+                      borderRadius: 10, textDecoration: "none",
+                      fontSize: "0.86rem", fontWeight: 700, marginBottom: 22,
+                    }}
+                  >
+                    {meta.cta}
+                  </Link>
                   <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 9 }}>
-                    {meta.features.map(f => (
+                    {[...buildDynamicFeatures(p), ...meta.staticFeatures].map(f => (
                       <li key={f} style={{
                         display: "flex", alignItems: "flex-start", gap: 8,
                         fontSize: "0.82rem", lineHeight: 1.45,
@@ -955,7 +956,6 @@ export default function LandingPage() {
                   { label: "Segurança Enterprise", href: "#enterprise" },
                   { label: "Planos e Preços", href: "#pricing" },
                   { label: "FAQ", href: "#faq" },
-                  { label: "Calculadora de Risco", href: "/roi" },
                   { label: "Documentação da API", href: "/login" },
                 ].map(l => (
                   <a key={l.label} href={l.href} style={{ fontSize: "0.83rem", color: "var(--text-secondary)", textDecoration: "none" }}>
@@ -974,14 +974,14 @@ export default function LandingPage() {
               </h4>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
-                  { label: "Política de Privacidade", href: "/privacy" },
-                  { label: "Termos de Serviço", href: "/terms" },
-                  { label: "DPA — Art. 18 LGPD", href: "/dpa" },
-                  { label: "Calculadora de Risco LGPD", href: "/roi" },
+                  "Política de Privacidade",
+                  "Termos de Serviço",
+                  "LGPD — Art. 18 (DPA)",
+                  "Relatório de Conformidade ANPD",
                 ].map(l => (
-                  <Link key={l.label} href={l.href} style={{ fontSize: "0.83rem", color: "var(--text-secondary)", textDecoration: "none" }}>
-                    {l.label}
-                  </Link>
+                  <a key={l} href="#" style={{ fontSize: "0.83rem", color: "var(--text-secondary)", textDecoration: "none" }}>
+                    {l}
+                  </a>
                 ))}
               </div>
             </div>
