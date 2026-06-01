@@ -241,6 +241,16 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       if (qRes.ok) setQueue(await qRes.json());
       if (countRes.ok) { const c = await countRes.json(); setDbTotal(c.count ?? null); }
       if (pendingRes.ok) setPendingApproval(await pendingRes.json());
+      // Phase 2: Load workspaces after server is warm — header selector
+      try {
+        const wsRes = await apiFetch(`${API}/workspaces`, { headers: h });
+        if (wsRes.ok) {
+          const ws = await wsRes.json();
+          setWorkspaces(ws);
+          if (ws.length > 0) setActiveWorkspace((prev: number | null) => prev ?? ws[0].id);
+        }
+      } catch { /* non-fatal */ }
+      finally { setWorkspacesLoaded(true); }
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError")
         setError(t.dashboard.errTimeout);
@@ -439,10 +449,6 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     finally { setWorkspacesLoaded(true); }
   }, [activeWorkspace]);
 
-  // Phase 2: Load workspaces on mount so header selector is always visible
-  useEffect(() => {
-    fetchWorkspaces();
-  }, [fetchWorkspaces]);
 
   const fetchWorkspaceMembers = useCallback(async (wsId: number) => {
     const h = await getFreshHeaders();
