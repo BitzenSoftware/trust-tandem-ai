@@ -1893,127 +1893,156 @@ export default function DashboardClient({ token: _token, userName }: { token: st
               </div>
             )}
 
-            {/* Current plan card */}
-            <div style={s.settingsCard}>
-              <p style={s.settingsTitle}>{t.subscription.currentPlan}</p>
-              {!subscription ? (
-                <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>A carregar...</p>
-              ) : (
-                <>
-                  {/* Status badge */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                    <span style={{
-                      display: "inline-flex", alignItems: "center", gap: 6,
-                      padding: "5px 14px", borderRadius: 20, fontSize: "0.78rem", fontWeight: 700,
-                      backgroundColor: subscription.status === "active" ? "var(--success-subtle)" :
-                                       subscription.status === "trialing" ? "#fef9ec" : "var(--danger-subtle)",
-                      color: subscription.status === "active" ? "var(--success-text)" :
-                             subscription.status === "trialing" ? "#92400e" : "var(--danger-text)",
-                      border: `1px solid ${subscription.status === "active" ? "var(--success)" : subscription.status === "trialing" ? "#f59e0b" : "var(--danger)"}`,
-                    }}>
-                      {subscription.status === "trialing" && `${t.subscription.trialActive} · ${subscription.trial_days_left ?? 0} ${t.subscription.trialDaysLeft}`}
-                      {subscription.status === "active" && `${(subscription.plan || "").charAt(0).toUpperCase() + (subscription.plan || "").slice(1)} ${t.subscription.active}`}
-                      {subscription.status === "expired" && t.subscription.trialExpired}
-                      {subscription.status === "canceled" && t.subscription.canceled}
-                      {subscription.status === "free" && t.subscription.free}
-                    </span>
-                  </div>
-
-                  {/* Description */}
-                  <p style={{ fontSize: "0.84rem", color: "var(--text-secondary)", marginBottom: 18, lineHeight: 1.6 }}>
-                    {subscription.status === "trialing" ? t.subscription.trialDesc :
-                     subscription.status === "active"   ? t.subscription.activeDesc :
-                     subscription.status === "expired"  ? t.subscription.trialExpiredDesc :
-                     t.subscription.freeDesc}
-                  </p>
-
-                  {/* Action buttons */}
-                  <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 10 }}>
-                    {subscription.status === "active" ? (
-                      <button onClick={handlePortal} disabled={subLoading}
-                        style={{ ...s.ingestBtn, opacity: subLoading ? 0.6 : 1 }}>
-                        {subLoading ? t.subscription.redirectingPortal : t.subscription.manageSubscription}
-                      </button>
-                    ) : (
-                      <>
-                        <button onClick={() => handleCheckout("pro")} disabled={subLoading}
-                          style={{ ...s.ingestBtn, opacity: subLoading ? 0.6 : 1 }}>
-                          {subLoading ? t.subscription.redirectingCheckout : `${t.subscription.subscribeNow} · R$${publicPlans.find(p => p.plan_name === "pro")?.price_monthly ?? 99}${t.subscription.perMonth}`}
-                        </button>
-                        {subscription?.enterprise_config ? (
-                          <button onClick={() => handleCheckout("enterprise")} disabled={subLoading}
-                            style={{ ...s.ingestBtn, backgroundColor: "#1e293b", opacity: subLoading ? 0.6 : 1 }}>
-                            {subLoading ? t.subscription.redirectingCheckout
-                              : `${t.subscription.subscribeNow} Enterprise · ${subscription.enterprise_config.currency_display === "BRL" ? "R$" : "$"}${subscription.enterprise_config.amount_display}${t.subscription.perMonth}`}
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => window.open("mailto:bitzensoftware@bitzen.app?subject=Trust%20%26%20Tandem%20AI%20%E2%80%94%20Plano%20Enterprise&body=Ol%C3%A1%2C%20tenho%20interesse%20no%20plano%20Enterprise.%20Podemos%20agendar%20uma%20conversa%3F", "_blank")}
-                            style={{ ...s.ingestBtn, backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", border: "1px solid var(--border)" }}>
-                            {t.subscription.talkToExpert}
-                          </button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Plan comparison table */}
+            {/* Plan comparison table with inline actions */}
             <div style={s.settingsCard}>
               <p style={s.settingsTitle}>{t.subscription.compareTitle}</p>
-              <div style={{ overflowX: "auto" as const }}>
-                {(() => {
-                  const pl = (name: string) => publicPlans.find(p => p.plan_name === name);
-                  const fmtRec  = (n?: number) => !n || n === 0 ? "Ilimitado" : n.toLocaleString("pt-BR");
-                  const fmtKeys = (n?: number) => !n || n >= 999 ? "Ilimitado" : String(n);
-                  const fmtDiag = (n?: number) => !n || n === 0 ? "Ilimitado" : String(n);
-                  const fmtPrice = (name: string, fallback: number) => {
-                    if (name === "starter")    return t.subscription.freePrice;
-                    if (name === "enterprise") return "Sob consulta";
-                    const v = pl(name)?.price_monthly ?? fallback;
-                    return `R$${v.toLocaleString("pt-BR")}${t.subscription.perMonth}`;
-                  };
-                  const cols = ["Trial", "Business", "Professional", "Enterprise"];
-                  const names = ["starter", "pro", "professional", "enterprise"];
-                  const rows: { label: string; vals: string[] }[] = [
-                    { label: t.subscription.price,        vals: names.map(n => fmtPrice(n, n === "pro" ? 497 : 1490)) },
-                    { label: "Registros/mês",             vals: [fmtRec(pl("starter")?.records_per_month ?? 0), fmtRec(pl("pro")?.records_per_month ?? 50000), fmtRec(pl("professional")?.records_per_month ?? 200000), "Ilimitado"] },
-                    { label: "API Keys",                  vals: [fmtKeys(pl("starter")?.api_keys_limit ?? 1), fmtKeys(pl("pro")?.api_keys_limit ?? 5), fmtKeys(pl("professional")?.api_keys_limit ?? 20), "Ilimitado"] },
-                    { label: "Diagnósticos/mês",          vals: [fmtDiag(pl("starter")?.diagnoses_per_month ?? 50), "Ilimitado", "Ilimitado", "Ilimitado"] },
-                    { label: t.subscription.fieldLimit,   vals: [String(pl("starter")?.field_limit ?? 5), String(pl("pro")?.field_limit ?? 15), String(pl("professional")?.field_limit ?? 20), "Ilimitado"] },
-                    { label: t.subscription.feat_lgpd,    vals: ["✓", "✓", "✓", "✓"] },
-                    { label: t.subscription.feat_fields,  vals: ["✓", "✓", "✓", "✓"] },
-                    { label: t.subscription.feat_webhook, vals: ["—", "✓", "✓", "✓"] },
-                    { label: t.subscription.feat_bulk,    vals: ["—", "✓", "✓", "✓"] },
-                    { label: t.subscription.feat_support, vals: ["—", "—", "✓", "✓"] },
-                  ];
+              {!subscription ? (
+                <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>A carregar...</p>
+              ) : (() => {
+                const pl = (name: string) => publicPlans.find(p => p.plan_name === name);
+                const fmtRec  = (n?: number) => !n || n === 0 ? "Ilimitado" : n.toLocaleString("pt-BR");
+                const fmtKeys = (n?: number) => !n || n >= 999 ? "Ilimitado" : String(n);
+                const fmtDiag = (n?: number) => !n || n === 0 ? "Ilimitado" : String(n);
+
+                const PLAN_ORDER: Record<string, number> = { starter: 0, pro: 1, professional: 2, enterprise: 3 };
+                const PLAN_LABELS: Record<string, string> = { starter: "Trial", pro: "Business", professional: "Professional", enterprise: "Enterprise" };
+                const names = ["starter", "pro", "professional", "enterprise"];
+
+                const currentPlanName = subscription.status === "active" ? (subscription.plan ?? "starter") : "starter";
+                const currentIdx = PLAN_ORDER[currentPlanName] ?? 0;
+
+                const fmtPrice = (name: string) => {
+                  if (name === "starter")    return { main: "Grátis", sub: "15 dias" };
+                  if (name === "enterprise") return { main: "Sob consulta", sub: "" };
+                  const v = pl(name)?.price_monthly;
+                  return { main: `R$${(v ?? 0).toLocaleString("pt-BR")}`, sub: "/mês" };
+                };
+
+                const renderBtn = (name: string, idx: number) => {
+                  const isCurrent = name === currentPlanName;
+                  if (name === "enterprise") {
+                    if (subscription.enterprise_config) {
+                      return (
+                        <button onClick={() => handleCheckout("enterprise")} disabled={subLoading}
+                          style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer", fontSize: "0.78rem", fontWeight: 700, backgroundColor: "#1e293b", color: "#fff", opacity: subLoading ? 0.6 : 1 }}>
+                          {isCurrent ? t.subscription.manageSubscription : `Fazer Upgrade`}
+                        </button>
+                      );
+                    }
+                    return (
+                      <button onClick={() => window.open("mailto:bitzensoftware@bitzen.app?subject=Trust%20%26%20Tandem%20AI%20%E2%80%94%20Plano%20Enterprise", "_blank")}
+                        style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer", fontSize: "0.78rem", fontWeight: 700, backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)" }}>
+                        {t.subscription.talkToExpert}
+                      </button>
+                    );
+                  }
+                  if (isCurrent) {
+                    if (subscription.status === "active") {
+                      return (
+                        <button onClick={handlePortal} disabled={subLoading}
+                          style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "2px solid var(--accent)", cursor: "pointer", fontSize: "0.78rem", fontWeight: 700, backgroundColor: "transparent", color: "var(--accent)", opacity: subLoading ? 0.6 : 1 }}>
+                          {subLoading ? "..." : t.subscription.manageSubscription}
+                        </button>
+                      );
+                    }
+                    if (subscription.status === "trialing") {
+                      return (
+                        <div style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "2px solid #f59e0b", fontSize: "0.75rem", fontWeight: 700, color: "#92400e", backgroundColor: "#fef9ec", textAlign: "center" as const }}>
+                          {t.subscription.trialActive} · {subscription.trial_days_left ?? 0}d
+                        </div>
+                      );
+                    }
+                    return (
+                      <div style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "1px solid var(--border)", fontSize: "0.75rem", fontWeight: 600, color: "var(--text-muted)", backgroundColor: "var(--bg-surface-2)", textAlign: "center" as const }}>
+                        Plano atual
+                      </div>
+                    );
+                  }
+                  if (idx > currentIdx) {
+                    const price = pl(name)?.price_monthly;
+                    return (
+                      <button onClick={() => handleCheckout(name)} disabled={subLoading}
+                        style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer", fontSize: "0.78rem", fontWeight: 700, backgroundColor: "var(--accent)", color: "#fff", opacity: subLoading ? 0.6 : 1 }}>
+                        {subLoading ? "..." : `Fazer Upgrade · R$${(price ?? 0).toLocaleString("pt-BR")}/mês`}
+                      </button>
+                    );
+                  }
                   return (
+                    <button onClick={handlePortal} disabled={subLoading}
+                      style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer", fontSize: "0.78rem", fontWeight: 600, backgroundColor: "transparent", color: "var(--text-muted)", opacity: subLoading ? 0.6 : 1 }}>
+                      {subLoading ? "..." : "Fazer Downgrade"}
+                    </button>
+                  );
+                };
+
+                const rows: { label: string; vals: string[] }[] = [
+                  { label: "Registros/mês",            vals: [fmtRec(pl("starter")?.records_per_month ?? 0), fmtRec(pl("pro")?.records_per_month ?? 50000), fmtRec(pl("professional")?.records_per_month ?? 200000), "Ilimitado"] },
+                  { label: "API Keys",                 vals: [fmtKeys(pl("starter")?.api_keys_limit ?? 1), fmtKeys(pl("pro")?.api_keys_limit ?? 5), fmtKeys(pl("professional")?.api_keys_limit ?? 20), "Ilimitado"] },
+                  { label: "Diagnósticos/mês",         vals: [fmtDiag(pl("starter")?.diagnoses_per_month ?? 50), "Ilimitado", "Ilimitado", "Ilimitado"] },
+                  { label: t.subscription.fieldLimit,  vals: [String(pl("starter")?.field_limit ?? 5), String(pl("pro")?.field_limit ?? 15), String(pl("professional")?.field_limit ?? 20), "Ilimitado"] },
+                  { label: t.subscription.feat_lgpd,   vals: ["✓", "✓", "✓", "✓"] },
+                  { label: t.subscription.feat_fields, vals: ["✓", "✓", "✓", "✓"] },
+                  { label: t.subscription.feat_webhook,vals: ["—", "✓", "✓", "✓"] },
+                  { label: t.subscription.feat_bulk,   vals: ["—", "✓", "✓", "✓"] },
+                  { label: t.subscription.feat_support,vals: ["—", "—", "✓", "✓"] },
+                ];
+
+                return (
+                  <div style={{ overflowX: "auto" as const }}>
                     <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: "0.83rem" }}>
                       <thead>
                         <tr>
-                          {["", ...cols].map(h => (
-                            <th key={h} style={{ padding: "8px 14px", textAlign: h === "" ? "left" as const : "center" as const, color: "var(--text-secondary)", fontWeight: 600, borderBottom: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", whiteSpace: "nowrap" as const }}>
-                              {h}
-                            </th>
-                          ))}
+                          <th style={{ padding: "8px 14px", textAlign: "left" as const, borderBottom: "2px solid var(--border)", width: "28%" }} />
+                          {names.map((name, idx) => {
+                            const isCurrent = name === currentPlanName;
+                            const { main, sub } = fmtPrice(name);
+                            return (
+                              <th key={name} style={{
+                                padding: "14px 12px 10px", textAlign: "center" as const,
+                                borderBottom: `2px solid ${isCurrent ? "var(--accent)" : "var(--border)"}`,
+                                backgroundColor: isCurrent ? "var(--accent-subtle)" : "var(--bg-surface-2)",
+                                minWidth: 130,
+                              }}>
+                                <div style={{ display: "flex", flexDirection: "column" as const, gap: 4, alignItems: "center" }}>
+                                  {isCurrent && (
+                                    <span style={{ fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.06em", color: "var(--accent)", textTransform: "uppercase" as const }}>
+                                      ● PLANO ATUAL
+                                    </span>
+                                  )}
+                                  <span style={{ fontWeight: 700, fontSize: "0.88rem", color: "var(--text-primary)" }}>{PLAN_LABELS[name]}</span>
+                                  <div style={{ display: "flex", alignItems: "baseline", gap: 2 }}>
+                                    <span style={{ fontWeight: 700, fontSize: "1rem", color: isCurrent ? "var(--accent)" : "var(--text-primary)" }}>{main}</span>
+                                    {sub && <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{sub}</span>}
+                                  </div>
+                                  <div style={{ width: "100%", marginTop: 6 }}>{renderBtn(name, idx)}</div>
+                                </div>
+                              </th>
+                            );
+                          })}
                         </tr>
                       </thead>
                       <tbody>
                         {rows.map((row, i) => (
                           <tr key={i} style={{ backgroundColor: i % 2 === 0 ? "transparent" : "var(--bg-surface-2)" }}>
                             <td style={{ padding: "9px 14px", color: "var(--text-primary)", fontWeight: 500, whiteSpace: "nowrap" as const }}>{row.label}</td>
-                            {row.vals.map((v, j) => (
-                              <td key={j} style={{ padding: "9px 14px", textAlign: "center" as const, color: v === "—" ? "var(--text-muted)" : v === "✓" ? "var(--success-text)" : "var(--text-primary)", fontWeight: v === "✓" ? 600 : 400 }}>{v}</td>
-                            ))}
+                            {row.vals.map((v, j) => {
+                              const isCurrent = names[j] === currentPlanName;
+                              return (
+                                <td key={j} style={{ padding: "9px 12px", textAlign: "center" as const,
+                                  backgroundColor: isCurrent ? "var(--accent-subtle)" : "transparent",
+                                  color: v === "—" ? "var(--text-muted)" : v === "✓" ? "var(--success-text)" : isCurrent ? "var(--accent)" : "var(--text-primary)",
+                                  fontWeight: v === "✓" || isCurrent ? 600 : 400 }}>
+                                  {v}
+                                </td>
+                              );
+                            })}
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                  );
-                })()}
-              </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
