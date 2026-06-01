@@ -434,6 +434,16 @@ class EnterpriseClientIn(BaseModel):
     currency_display: str = "BRL"
 
 
+class WorkspaceIn(BaseModel):
+    name: str
+    description: Optional[str] = ""
+
+
+class WorkspaceMemberIn(BaseModel):
+    email: str
+    role: str = "operator"
+
+
 def _get_stripe_key() -> str:
     """Returns Stripe secret key from env var or encrypted vault."""
     key = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -1439,6 +1449,62 @@ def setup_enterprise_tiers_stripe(force: bool = False):
             results.append({"id": tier["id"], "name": tier["name"], "status": "error", "detail": str(exc)})
 
     return {"results": results, "tiers": repository.get_enterprise_tiers(active_only=False)}
+
+
+# --- workspaces ---
+
+@_router.get("/workspaces", summary="Lista todos os workspaces do tenant")
+def listar_workspaces(tenant_id: str = Depends(_get_tenant_id)):
+    return repository.get_workspaces(tenant_id)
+
+
+@_router.post("/workspaces", status_code=status.HTTP_201_CREATED,
+              summary="Cria um novo workspace")
+def criar_workspace(body: WorkspaceIn, tenant_id: str = Depends(_get_tenant_id)):
+    plan = repository.get_tenant_plan(tenant_id)
+    limit = repository.get_workspaces_limit(plan)
+    current_count = len(repository.get_workspaces(tenant_id))
+    if current_count >= limit:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Limite de espaços de trabalho atingido ({current_count}/{limit}). Faça upgrade para adicionar mais.",
+        )
+    return repository.create_workspace(tenant_id, body.name, body.description)
+
+
+@_router.get("/workspaces/{workspace_id}/members", summary="Lista membros de um workspace")
+def listar_membros_workspace(workspace_id: int, tenant_id: str = Depends(_get_tenant_id)):
+    # TODO: Verificar que o tenant tem acesso a este workspace
+    return repository.get_workspace_members(workspace_id)
+
+
+@_router.post("/workspaces/{workspace_id}/members", status_code=status.HTTP_201_CREATED,
+              summary="Convida um utilizador para um workspace")
+def convidar_membro_workspace(workspace_id: int, body: WorkspaceMemberIn,
+                              tenant_id: str = Depends(_get_tenant_id),
+                              user_id: str = Depends(_get_user_id)):
+    # TODO: Verificar que o user_id é admin do workspace
+    if body.role not in ["admin", "operator", "viewer"]:
+        raise HTTPException(status_code=400, detail="Role inválida (admin/operator/viewer).")
+    return repository.add_workspace_member(workspace_id, tenant_id, body.email, body.role, user_id)
+
+
+@_router.patch("/workspaces/{workspace_id}/members/{email}", summary="Actualiza role de um membro")
+def actualizar_role_membro(workspace_id: int, email: str, role: str,
+                           tenant_id: str = Depends(_get_tenant_id)):
+    # TODO: Verificar que o utilizador é admin do workspace
+    if role not in ["admin", "operator", "viewer"]:
+        raise HTTPException(status_code=400, detail="Role inválida (admin/operator/viewer).")
+    repository.update_workspace_member_role(workspace_id, email, role)
+    return {"status": "updated"}
+
+
+@_router.delete("/workspaces/{workspace_id}/members/{email}", summary="Remove um membro de um workspace")
+def remover_membro_workspace(workspace_id: int, email: str,
+                             tenant_id: str = Depends(_get_tenant_id)):
+    # TODO: Verificar que o utilizador é admin do workspace
+    repository.remove_workspace_member(workspace_id, email)
+    return {"status": "removed"}
 
 
 app.include_router(_router)
