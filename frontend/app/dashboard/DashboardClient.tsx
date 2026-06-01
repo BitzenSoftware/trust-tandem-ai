@@ -1329,7 +1329,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
               </button>
             )}
             {userRole === "admin" && (
-              <button onClick={() => { setTab("schema"); if (!schemaLoaded) fetchSchema(); }} style={tab === "schema" ? s.tabActive : s.tabInactive}>
+              <button onClick={() => { setTab("schema"); if (!workspacesLoaded) fetchWorkspaces(); if (!schemaLoaded) fetchSchema(); }} style={tab === "schema" ? s.tabActive : s.tabInactive}>
                 {t.schema.tab}
               </button>
             )}
