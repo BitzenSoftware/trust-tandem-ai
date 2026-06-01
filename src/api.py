@@ -1558,6 +1558,15 @@ def remover_membro_workspace(workspace_id: int, email: str,
     return {"status": "removed"}
 
 
+@_router.patch("/workspaces/{workspace_id}", summary="Edita nome e descrição de um workspace",
+               dependencies=[Depends(_require_admin)])
+def editar_workspace(workspace_id: int, body: WorkspaceIn, tenant_id: str = Depends(_get_tenant_id)):
+    updated = repository.update_workspace(tenant_id, workspace_id, body.name, body.description or "")
+    if not updated:
+        raise HTTPException(status_code=404, detail="Workspace não encontrado.")
+    return updated
+
+
 @_router.delete("/workspaces/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT,
                 summary="Elimina um workspace",
                 dependencies=[Depends(_require_admin)])

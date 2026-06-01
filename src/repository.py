@@ -1440,6 +1440,22 @@ def create_workspace(tenant_id: str, name: str, description: str = "") -> dict:
     return {}
 
 
+def update_workspace(tenant_id: str, workspace_id: int, name: str, description: str = "") -> dict | None:
+    """Updates a workspace name and description."""
+    if USE_SUPABASE:
+        resp = _http.patch(
+            f"{_SUPABASE_URL}/rest/v1/workspaces",
+            json={"name": name, "description": description},
+            params={"id": f"eq.{workspace_id}", "tenant_id": f"eq.{tenant_id}"},
+            headers={**_HEADERS, "Prefer": "return=representation"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0] if rows else None
+    return None
+
+
 def delete_workspace(tenant_id: str, workspace_id: int) -> bool:
     """Deletes a workspace. Returns True if deleted."""
     if USE_SUPABASE:

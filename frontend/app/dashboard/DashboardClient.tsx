@@ -114,6 +114,15 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [newWsDesc,     setNewWsDesc]     = useState("");
   const [wsSaving,      setWsSaving]      = useState(false);
   const [wsError,       setWsError]       = useState("");
+  // Workspace delete modal
+  const [wsDeleteTarget, setWsDeleteTarget] = useState<{ id: number; name: string } | null>(null);
+  const [wsDeleteInput,  setWsDeleteInput]  = useState("");
+  const [wsDeleting,     setWsDeleting]     = useState(false);
+  // Workspace edit modal
+  const [wsEditTarget,   setWsEditTarget]   = useState<{ id: number; name: string; description: string } | null>(null);
+  const [wsEditName,     setWsEditName]     = useState("");
+  const [wsEditDesc,     setWsEditDesc]     = useState("");
+  const [wsEditSaving,   setWsEditSaving]   = useState(false);
   const [planConfigs,   setPlanConfigs]   = useState<PlanConfig[]>([]);
   const [planSaving,    setPlanSaving]    = useState<Record<string, boolean>>({});
   const [planSaved,     setPlanSaved]     = useState<Record<string, boolean>>({});
@@ -3012,7 +3021,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                 {/* Lista de workspaces */}
                 <p style={{ fontSize: "0.84rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 12 }}>Workspaces existentes</p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {/* Principal é sempre o primeiro */}
+                  {/* Principal — não editável nem eliminável */}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
                     padding: "12px 14px", borderRadius: 8, backgroundColor: "var(--bg-surface-2)", border: "1px solid var(--border)" }}>
                     <div>
@@ -3031,18 +3040,18 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                         <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)" }}>{ws.name}</p>
                         {ws.description && <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{ws.description}</p>}
                       </div>
-                      <button
-                        onClick={async () => {
-                          if (!confirm(`Eliminar workspace "${ws.name}"? Esta acção não pode ser desfeita.`)) return;
-                          const h = await getFreshHeaders();
-                          if (!h) return;
-                          await apiFetch(`${API}/workspaces/${ws.id}`, { method: "DELETE", headers: h });
-                          setWorkspaces(prev => prev.filter(w => w.id !== ws.id));
-                          if (activeWorkspace === ws.id) setActiveWorkspace(null);
-                        }}
-                        style={s.revokeBtn}>
-                        Eliminar
-                      </button>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => { setWsEditTarget(ws); setWsEditName(ws.name); setWsEditDesc(ws.description ?? ""); }}
+                          style={{ ...s.diagnoseBtn, fontSize: "0.78rem" }}>
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => { setWsDeleteTarget(ws); setWsDeleteInput(""); }}
+                          style={s.revokeBtn}>
+                          Eliminar
+                        </button>
+                      </div>
                     </div>
                   ))}
                   {workspaces.filter(ws => ws.name !== "Principal").length === 0 && (
@@ -3051,6 +3060,127 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                     </p>
                   )}
                 </div>
+
+                {/* ── Modal Eliminar Workspace ── */}
+                {wsDeleteTarget && (
+                  <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 1001,
+                    display: "flex", alignItems: "center", justifyContent: "center" }}
+                    onClick={e => { if (e.target === e.currentTarget) { setWsDeleteTarget(null); setWsDeleteInput(""); } }}>
+                    <div style={{ backgroundColor: "var(--bg-surface)", borderRadius: 16, width: "100%", maxWidth: 440,
+                      boxShadow: "0 20px 60px rgba(0,0,0,0.3)", border: "1px solid var(--border)", overflow: "hidden" }}>
+                      <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)" }}>
+                        <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>
+                          Eliminar workspace
+                        </h3>
+                        <p style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
+                          Esta acção é irreversível. Todos os dados associados serão eliminados.
+                        </p>
+                      </div>
+                      <div style={{ padding: "20px 24px" }}>
+                        <p style={{ fontSize: "0.84rem", color: "var(--text-primary)", marginBottom: 12 }}>
+                          Para confirmar, escreva <strong style={{ color: "var(--danger, #dc2626)" }}>eliminar</strong> no campo abaixo:
+                        </p>
+                        <input
+                          type="text"
+                          placeholder="eliminar"
+                          value={wsDeleteInput}
+                          onChange={e => setWsDeleteInput(e.target.value)}
+                          style={{ ...s.ingestInput, width: "100%", boxSizing: "border-box" as const,
+                            borderColor: wsDeleteInput.toLowerCase() === "eliminar" ? "var(--danger, #dc2626)" : undefined }}
+                          autoFocus
+                        />
+                      </div>
+                      <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                        <button onClick={() => { setWsDeleteTarget(null); setWsDeleteInput(""); }}
+                          style={{ padding: "9px 20px", borderRadius: 10, border: "1px solid var(--border)", background: "none",
+                            color: "var(--text-secondary)", fontSize: "0.84rem", cursor: "pointer" }}>
+                          Cancelar
+                        </button>
+                        <button
+                          disabled={wsDeleteInput.toLowerCase() !== "eliminar" || wsDeleting}
+                          onClick={async () => {
+                            if (!wsDeleteTarget) return;
+                            setWsDeleting(true);
+                            const h = await getFreshHeaders();
+                            if (h) {
+                              await apiFetch(`${API}/workspaces/${wsDeleteTarget.id}`, { method: "DELETE", headers: h });
+                              setWorkspaces(prev => prev.filter(w => w.id !== wsDeleteTarget.id));
+                              if (activeWorkspace === wsDeleteTarget.id) setActiveWorkspace(null);
+                            }
+                            setWsDeleteTarget(null); setWsDeleteInput(""); setWsDeleting(false);
+                          }}
+                          style={{ padding: "9px 20px", borderRadius: 10, border: "none", cursor: wsDeleteInput.toLowerCase() !== "eliminar" ? "not-allowed" : "pointer",
+                            backgroundColor: wsDeleteInput.toLowerCase() === "eliminar" ? "var(--danger, #dc2626)" : "var(--bg-surface-2)",
+                            color: wsDeleteInput.toLowerCase() === "eliminar" ? "#fff" : "var(--text-muted)",
+                            fontSize: "0.84rem", fontWeight: 600,
+                            opacity: wsDeleting ? 0.6 : 1 }}>
+                          {wsDeleting ? "A eliminar..." : "Eliminar definitivamente"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Modal Editar Workspace ── */}
+                {wsEditTarget && (
+                  <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 1001,
+                    display: "flex", alignItems: "center", justifyContent: "center" }}
+                    onClick={e => { if (e.target === e.currentTarget) setWsEditTarget(null); }}>
+                    <div style={{ backgroundColor: "var(--bg-surface)", borderRadius: 16, width: "100%", maxWidth: 480,
+                      boxShadow: "0 20px 60px rgba(0,0,0,0.3)", border: "1px solid var(--border)", overflow: "hidden" }}>
+                      <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text-primary)" }}>Editar Workspace</h3>
+                        <button onClick={() => setWsEditTarget(null)}
+                          style={{ background: "none", border: "none", fontSize: "1.2rem", cursor: "pointer", color: "var(--text-muted)" }}>✕</button>
+                      </div>
+                      <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+                        <div>
+                          <label style={{ ...s.ingestLabel, display: "block", marginBottom: 6 }}>Nome</label>
+                          <input type="text" value={wsEditName} onChange={e => setWsEditName(e.target.value)}
+                            placeholder="Nome do workspace"
+                            style={{ ...s.ingestInput, width: "100%", boxSizing: "border-box" as const }} />
+                        </div>
+                        <div>
+                          <label style={{ ...s.ingestLabel, display: "block", marginBottom: 6 }}>Descrição</label>
+                          <input type="text" value={wsEditDesc} onChange={e => setWsEditDesc(e.target.value)}
+                            placeholder="Descrição (opcional)"
+                            style={{ ...s.ingestInput, width: "100%", boxSizing: "border-box" as const }} />
+                        </div>
+                      </div>
+                      <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                        <button onClick={() => setWsEditTarget(null)}
+                          style={{ padding: "9px 20px", borderRadius: 10, border: "1px solid var(--border)", background: "none",
+                            color: "var(--text-secondary)", fontSize: "0.84rem", cursor: "pointer" }}>
+                          Cancelar
+                        </button>
+                        <button
+                          disabled={wsEditSaving || !wsEditName.trim()}
+                          onClick={async () => {
+                            if (!wsEditTarget || !wsEditName.trim()) return;
+                            setWsEditSaving(true);
+                            const h = await getFreshHeaders();
+                            if (h) {
+                              const res = await apiFetch(`${API}/workspaces/${wsEditTarget.id}`, {
+                                method: "PATCH", headers: h,
+                                body: JSON.stringify({ name: wsEditName.trim(), description: wsEditDesc.trim() }),
+                              });
+                              if (res.ok) {
+                                setWorkspaces(prev => prev.map(w => w.id === wsEditTarget.id
+                                  ? { ...w, name: wsEditName.trim(), description: wsEditDesc.trim() }
+                                  : w
+                                ));
+                                setWsEditTarget(null);
+                              }
+                            }
+                            setWsEditSaving(false);
+                          }}
+                          style={{ ...s.ingestBtn, padding: "9px 24px", opacity: wsEditSaving || !wsEditName.trim() ? 0.6 : 1 }}>
+                          {wsEditSaving ? "A guardar..." : "Guardar"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
