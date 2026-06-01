@@ -784,7 +784,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     setTierPriceSaving(p => ({ ...p, [tierId]: true }));
     const h = await getFreshHeaders();
     if (!h) { setTierPriceSaving(p => ({ ...p, [tierId]: false })); return; }
-    const res = await apiFetch(`${API}/enterprise-tiers/${tierId}`, {
+    const res = await apiFetch(`${API}/admin/enterprise-tiers/${tierId}`, {
       method: "PATCH", headers: h,
       body: JSON.stringify({ stripe_price_id: editTierPrice[tierId] || null }),
     });
