@@ -848,12 +848,17 @@ def _merge_with_defaults(custom_rows: list[dict]) -> list[dict]:
     return sorted(merged.values(), key=lambda f: f.get("position", 0))
 
 
-def get_tenant_schema(tenant_id: str) -> list[dict]:
+def get_tenant_schema(tenant_id: str, workspace_id: int | None = None) -> list[dict]:
     if USE_SUPABASE:
+        params: dict = {"select": "field_key,label,field_type,required,position,validation_rules,is_sensitive",
+                        "tenant_id": f"eq.{tenant_id}", "order": "position.asc"}
+        if workspace_id is not None:
+            params["workspace_id"] = f"eq.{workspace_id}"
+        else:
+            params["workspace_id"] = "is.null"
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
-            params={"select": "field_key,label,field_type,required,position,validation_rules,is_sensitive",
-                    "tenant_id": f"eq.{tenant_id}", "order": "position.asc"},
+            params=params,
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
@@ -864,12 +869,20 @@ def get_tenant_schema(tenant_id: str) -> list[dict]:
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT field_key, label, field_type, required, position, validation_rules,"
-                " COALESCE(is_sensitive, 0) as is_sensitive"
-                " FROM tenant_field_schemas WHERE tenant_id = ? ORDER BY position",
-                (tenant_id,)
-            ).fetchall()
+            if workspace_id is not None:
+                rows = conn.execute(
+                    "SELECT field_key, label, field_type, required, position, validation_rules,"
+                    " COALESCE(is_sensitive, 0) as is_sensitive"
+                    " FROM tenant_field_schemas WHERE tenant_id = ? AND workspace_id = ? ORDER BY position",
+                    (tenant_id, workspace_id)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT field_key, label, field_type, required, position, validation_rules,"
+                    " COALESCE(is_sensitive, 0) as is_sensitive"
+                    " FROM tenant_field_schemas WHERE tenant_id = ? AND workspace_id IS NULL ORDER BY position",
+                    (tenant_id,)
+                ).fetchall()
             custom = []
             for r in rows:
                 d = dict(r)
@@ -884,30 +897,48 @@ def get_tenant_schema(tenant_id: str) -> list[dict]:
     return list(_DEFAULT_SCHEMA)
 
 
-def upsert_field_schema(tenant_id: str, field: dict) -> None:
+def upsert_field_schema(tenant_id: str, field: dict, workspace_id: int | None = None) -> None:
     if USE_SUPABASE:
+        row = {"tenant_id": tenant_id, **field, "is_sensitive": bool(field.get("is_sensitive", False))}
+        if workspace_id is not None:
+            row["workspace_id"] = workspace_id
         _http.post(
             f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
-            json={"tenant_id": tenant_id, **field, "is_sensitive": bool(field.get("is_sensitive", False))},
+            json=row,
             headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
             params={"on_conflict": "tenant_id,field_key"}, timeout=10,
         ).raise_for_status()
         return
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(_DB_PATH) as conn:
-        conn.execute(
-            "INSERT INTO tenant_field_schemas"
-            " (tenant_id, field_key, label, field_type, required, position, validation_rules, is_sensitive)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT(tenant_id, field_key) DO UPDATE SET"
-            " label=excluded.label, field_type=excluded.field_type, required=excluded.required,"
-            " position=excluded.position, validation_rules=excluded.validation_rules,"
-            " is_sensitive=excluded.is_sensitive",
-            (tenant_id, field["field_key"], field["label"], field["field_type"],
-             1 if field.get("required", True) else 0, field.get("position", 0),
-             json.dumps(field.get("validation_rules", {})),
-             1 if field.get("is_sensitive", False) else 0),
-        )
+        if workspace_id is not None:
+            conn.execute(
+                "INSERT INTO tenant_field_schemas"
+                " (tenant_id, workspace_id, field_key, label, field_type, required, position, validation_rules, is_sensitive)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(tenant_id, field_key) DO UPDATE SET"
+                " label=excluded.label, field_type=excluded.field_type, required=excluded.required,"
+                " position=excluded.position, validation_rules=excluded.validation_rules,"
+                " is_sensitive=excluded.is_sensitive",
+                (tenant_id, workspace_id, field["field_key"], field["label"], field["field_type"],
+                 1 if field.get("required", True) else 0, field.get("position", 0),
+                 json.dumps(field.get("validation_rules", {})),
+                 1 if field.get("is_sensitive", False) else 0),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO tenant_field_schemas"
+                " (tenant_id, field_key, label, field_type, required, position, validation_rules, is_sensitive)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(tenant_id, field_key) DO UPDATE SET"
+                " label=excluded.label, field_type=excluded.field_type, required=excluded.required,"
+                " position=excluded.position, validation_rules=excluded.validation_rules,"
+                " is_sensitive=excluded.is_sensitive",
+                (tenant_id, field["field_key"], field["label"], field["field_type"],
+                 1 if field.get("required", True) else 0, field.get("position", 0),
+                 json.dumps(field.get("validation_rules", {})),
+                 1 if field.get("is_sensitive", False) else 0),
+            )
 
 
 def get_tenant_plan(tenant_id: str) -> str:
@@ -1119,23 +1150,34 @@ def count_field_schemas(tenant_id: str, workspace_id: int | None = None) -> int:
     return 0
 
 
-def delete_field_schema(tenant_id: str, field_key: str) -> int:
+def delete_field_schema(tenant_id: str, field_key: str, workspace_id: int | None = None) -> int:
     if field_key in ("name",):
         return 0  # name is always required — cannot be removed
     if USE_SUPABASE:
+        params: dict = {"tenant_id": f"eq.{tenant_id}", "field_key": f"eq.{field_key}"}
+        if workspace_id is not None:
+            params["workspace_id"] = f"eq.{workspace_id}"
+        else:
+            params["workspace_id"] = "is.null"
         resp = _http.delete(
             f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
-            params={"tenant_id": f"eq.{tenant_id}", "field_key": f"eq.{field_key}"},
+            params=params,
             headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
         )
         resp.raise_for_status()
         return len(resp.json())
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
-            return conn.execute(
-                "DELETE FROM tenant_field_schemas WHERE tenant_id = ? AND field_key = ?",
-                (tenant_id, field_key)
-            ).rowcount
+            if workspace_id is not None:
+                return conn.execute(
+                    "DELETE FROM tenant_field_schemas WHERE tenant_id = ? AND field_key = ? AND workspace_id = ?",
+                    (tenant_id, field_key, workspace_id)
+                ).rowcount
+            else:
+                return conn.execute(
+                    "DELETE FROM tenant_field_schemas WHERE tenant_id = ? AND field_key = ? AND workspace_id IS NULL",
+                    (tenant_id, field_key)
+                ).rowcount
     return 0
 
 
