@@ -1288,10 +1288,17 @@ async def stripe_webhook(request: Request):
                 if items:
                     price_id = (items[0].get("price") or {}).get("id")
                     if price_id:
+                        # 1. Check standard plans
                         configs = repository.get_plan_configs()
                         cfg = next((c for c in configs if c.get("stripe_price_id") == price_id), None)
                         if cfg:
                             plan_name = cfg["plan_name"]
+                        else:
+                            # 2. Check enterprise tiers
+                            tiers = repository.get_enterprise_tiers(active_only=False)
+                            tier = next((t for t in tiers if t.get("stripe_price_id") == price_id), None)
+                            if tier:
+                                plan_name = "enterprise"
                 if plan_name:
                     mapped = "active" if new_status == "active" else new_status
                     repository.update_tenant_subscription(
