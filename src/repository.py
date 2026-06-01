@@ -1082,14 +1082,19 @@ def get_tenant_by_stripe_customer(stripe_customer_id: str) -> str | None:
 _DEFAULT_KEYS = {f["field_key"] for f in _DEFAULT_SCHEMA}
 
 
-def count_field_schemas(tenant_id: str) -> int:
+def count_field_schemas(tenant_id: str, workspace_id: int | None = None) -> int:
     """Counts only non-default custom fields (email and cpf are free baseline, never counted)."""
     excluded = ",".join(f'"{k}"' for k in _DEFAULT_KEYS)
     if USE_SUPABASE:
+        params: dict = {"select": "id", "tenant_id": f"eq.{tenant_id}",
+                        "field_key": f"not.in.({','.join(_DEFAULT_KEYS)})"}
+        if workspace_id is not None:
+            params["workspace_id"] = f"eq.{workspace_id}"
+        else:
+            params["workspace_id"] = "is.null"
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
-            params={"select": "id", "tenant_id": f"eq.{tenant_id}",
-                    "field_key": f"not.in.({','.join(_DEFAULT_KEYS)})"},
+            params=params,
             headers={**_HEADERS, "Prefer": "count=exact"},
             timeout=10,
         )
@@ -1100,10 +1105,16 @@ def count_field_schemas(tenant_id: str) -> int:
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
             placeholders = ",".join("?" * len(_DEFAULT_KEYS))
-            row = conn.execute(
-                f"SELECT COUNT(*) FROM tenant_field_schemas WHERE tenant_id = ? AND field_key NOT IN ({placeholders})",
-                (tenant_id, *_DEFAULT_KEYS),
-            ).fetchone()
+            if workspace_id is not None:
+                row = conn.execute(
+                    f"SELECT COUNT(*) FROM tenant_field_schemas WHERE tenant_id = ? AND workspace_id = ? AND field_key NOT IN ({placeholders})",
+                    (tenant_id, workspace_id, *_DEFAULT_KEYS),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    f"SELECT COUNT(*) FROM tenant_field_schemas WHERE tenant_id = ? AND workspace_id IS NULL AND field_key NOT IN ({placeholders})",
+                    (tenant_id, *_DEFAULT_KEYS),
+                ).fetchone()
             return row[0] if row else 0
     return 0
 
