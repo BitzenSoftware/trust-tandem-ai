@@ -147,7 +147,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
   const [webhookCurrent, setWebhookCurrent] = useState<{ url: string; secret: string; active: boolean } | null>(null);
   const [webhookLoading, setWebhookLoading] = useState(false);
-  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [, setSettingsLoaded] = useState(false);
   const [trialExpired,      setTrialExpired]      = useState(false);
   const [dbTotal,           setDbTotal]           = useState<number | null>(null);
   const [exportRowsPerFile, setExportRowsPerFile] = useState(10000);
@@ -158,6 +158,14 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [newMember,         setNewMember]         = useState({ email: "", role: "operator" });
   const [memberSaving,      setMemberSaving]      = useState(false);
   const [memberError,       setMemberError]       = useState("");
+  // Add user modal
+  const [showAddUserModal,  setShowAddUserModal]  = useState(false);
+  const [addUserTab,        setAddUserTab]        = useState<"utilizador" | "area" | "acessos">("utilizador");
+  const [addUserEmail,      setAddUserEmail]      = useState("");
+  const [addUserRole,       setAddUserRole]       = useState("operator");
+  const [addUserWorkspace,  setAddUserWorkspace]  = useState<number | null>(null);
+  const [addUserAccesses,   setAddUserAccesses]   = useState<string[]>(["dashboard", "review", "ingest", "compliance"]);
+  const [addUserSaving,     setAddUserSaving]     = useState(false);
   const [pendingApproval,   setPendingApproval]   = useState<{ name: string; email_hint: string; cpf_hint: string; operator_approved_by: string | null }[]>([]);
   const [adminApproveLoading, setAdminApproveLoading] = useState<Record<string, boolean>>({});
   const [showTierModal,     setShowTierModal]     = useState(false);
@@ -320,6 +328,53 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       }
     } catch { setMemberError("Erro de conexão."); }
     finally { setMemberSaving(false); }
+  }
+
+  const USER_MENUS = [
+    { key: "dashboard", label: "Dashboard" },
+    { key: "review",    label: "Fila de Revisão" },
+    { key: "ingest",    label: "Ingestão de Dados" },
+    { key: "settings",  label: "Configurações" },
+    { key: "schema",    label: "Schema" },
+    { key: "compliance",label: "Compliance" },
+    { key: "plan",      label: "Plano" },
+  ];
+
+  const DEFAULT_ACCESSES: Record<string, string[]> = {
+    admin:    ["dashboard","review","ingest","settings","schema","compliance","plan"],
+    operator: ["dashboard","review","ingest","compliance"],
+    viewer:   ["dashboard","compliance"],
+  };
+
+  async function handleAddUserSubmit() {
+    if (!addUserEmail) return;
+    setAddUserSaving(true);
+    const h = await getFreshHeaders();
+    if (!h) { setAddUserSaving(false); return; }
+    try {
+      // Add to tenant members
+      const res = await apiFetch(`${API}/members`, {
+        method: "POST", headers: h,
+        body: JSON.stringify({ email: addUserEmail, role: addUserRole }),
+      });
+      // If a specific workspace was selected, also add to workspace
+      if (res.ok && addUserWorkspace) {
+        await apiFetch(`${API}/workspaces/${addUserWorkspace}/members`, {
+          method: "POST", headers: h,
+          body: JSON.stringify({ email: addUserEmail, role: addUserRole }),
+        });
+      }
+      if (res.ok) {
+        setShowAddUserModal(false);
+        setAddUserEmail(""); setAddUserRole("operator");
+        setAddUserWorkspace(null);
+        setAddUserAccesses(DEFAULT_ACCESSES["operator"]);
+        setAddUserTab("utilizador");
+        const membersRes = await apiFetch(`${API}/members`, { headers: h });
+        if (membersRes.ok) setMembers(await membersRes.json());
+      }
+    } catch { /* ignore */ }
+    finally { setAddUserSaving(false); }
   }
 
   async function handleRemoveMember(email: string) {
@@ -2293,73 +2348,162 @@ export default function DashboardClient({ token: _token, userName }: { token: st
           /* ── UTILIZADORES ── */
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={s.card}>
-              <h2 style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 16 }}>
-                Membros — {activeWorkspace ? (workspaces.find(w => w.id === activeWorkspace)?.name ?? "Workspace") : "Principal"}
-              </h2>
+              {/* Header com botão Adicionar */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                <div>
+                  <h2 style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 2 }}>Utilizadores</h2>
+                  <p style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                    {activeWorkspace ? `Área: ${workspaces.find(w => w.id === activeWorkspace)?.name ?? "Workspace"}` : "Área: Principal"}
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setAddUserWorkspace(activeWorkspace);
+                    setAddUserAccesses(DEFAULT_ACCESSES[addUserRole] ?? DEFAULT_ACCESSES["operator"]);
+                    setAddUserTab("utilizador");
+                    setShowAddUserModal(true);
+                  }}
+                  style={{ ...s.ingestBtn, padding: "8px 20px", fontSize: "0.84rem" }}>
+                  + Adicionar
+                </button>
+              </div>
 
-              {/* Convidar — só para workspace específico */}
-              {activeWorkspace && (
-                <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid var(--border)" }}>
-                  <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 12 }}>Convidar novo membro</p>
-                  <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={s.ingestLabel}>E-mail</label>
-                      <input type="email" style={s.ingestInput} placeholder="utilizador@empresa.com"
-                        value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} />
+              {/* Cabeçalho da tabela */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px 80px", gap: 8,
+                padding: "8px 12px", borderRadius: 6, backgroundColor: "var(--bg-surface-2)",
+                fontSize: "0.72rem", fontWeight: 700, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase" as const }}>
+                <span>E-mail</span><span>Papel</span><span>Área</span><span></span>
+              </div>
+
+              {/* Lista */}
+              {members.length === 0 ? (
+                <p style={{ color: "var(--text-muted)", fontSize: "0.84rem", padding: "16px 0" }}>
+                  Nenhum utilizador adicionado ainda.
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {members.map(m => (
+                    <div key={m.email} style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px 80px",
+                      gap: 8, alignItems: "center", padding: "10px 12px", borderRadius: 8,
+                      backgroundColor: "var(--bg-surface-2)", border: "1px solid var(--border)" }}>
+                      <p style={{ fontSize: "0.84rem", fontWeight: 600, color: "var(--text-primary)" }}>{m.email}</p>
+                      <span style={{ fontSize: "0.72rem", fontWeight: 700, padding: "2px 10px", borderRadius: 20, textAlign: "center" as const,
+                        color: m.role === "admin" ? "#6d28d9" : m.role === "operator" ? "var(--accent)" : "var(--text-muted)",
+                        backgroundColor: m.role === "admin" ? "#ede9fe" : m.role === "operator" ? "var(--accent-subtle)" : "var(--bg-surface-2)",
+                        border: "1px solid var(--border)" }}>
+                        {m.role}
+                      </span>
+                      <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                        {activeWorkspace ? (workspaces.find(w => w.id === activeWorkspace)?.name ?? "—") : "Principal"}
+                      </span>
+                      <button onClick={() => handleRemoveMember(m.email)} style={s.revokeBtn}>Remover</button>
                     </div>
-                    <div>
-                      <label style={s.ingestLabel} htmlFor="invite-role">Role</label>
-                      <select id="invite-role" style={{ ...s.ingestInput, padding: "10px 14px" }}
-                        value={inviteRole} onChange={e => setInviteRole(e.target.value)}>
-                        <option value="admin">Admin</option>
-                        <option value="operator">Operator</option>
-                        <option value="viewer">Viewer</option>
-                      </select>
-                    </div>
-                    <button onClick={() => handleInviteWorkspaceMember(activeWorkspace)}
-                      disabled={inviteLoading || !inviteEmail}
-                      style={{ ...s.ingestBtn, opacity: inviteLoading || !inviteEmail ? 0.6 : 1, whiteSpace: "nowrap" as const }}>
-                      {inviteLoading ? "A convidar..." : "Convidar"}
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ── Modal Adicionar Utilizador ── */}
+            {showAddUserModal && (
+              <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 1000,
+                display: "flex", alignItems: "center", justifyContent: "center" }}
+                onClick={e => { if (e.target === e.currentTarget) setShowAddUserModal(false); }}>
+                <div style={{ backgroundColor: "var(--bg-surface)", borderRadius: 16, width: "100%", maxWidth: 540,
+                  boxShadow: "0 20px 60px rgba(0,0,0,0.3)", border: "1px solid var(--border)", overflow: "hidden" }}>
+
+                  {/* Modal Header */}
+                  <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text-primary)" }}>Adicionar Utilizador</h3>
+                    <button onClick={() => setShowAddUserModal(false)}
+                      style={{ background: "none", border: "none", fontSize: "1.2rem", cursor: "pointer", color: "var(--text-muted)", lineHeight: 1 }}>✕</button>
+                  </div>
+
+                  {/* Modal Tabs */}
+                  <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 24px" }}>
+                    {(["utilizador", "area", "acessos"] as const).map(t => (
+                      <button key={t} onClick={() => setAddUserTab(t)}
+                        style={{ padding: "12px 16px", background: "none", border: "none", cursor: "pointer", fontSize: "0.84rem", fontWeight: 600,
+                          color: addUserTab === t ? "var(--accent)" : "var(--text-muted)",
+                          borderBottom: addUserTab === t ? "2px solid var(--accent)" : "2px solid transparent",
+                          textTransform: "capitalize" as const }}>
+                        {t === "utilizador" ? "Utilizador" : t === "area" ? "Área" : "Acessos"}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Modal Body */}
+                  <div style={{ padding: "24px" }}>
+                    {addUserTab === "utilizador" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                        <div>
+                          <label style={{ ...s.ingestLabel, display: "block", marginBottom: 6 }}>E-mail</label>
+                          <input type="email" value={addUserEmail} onChange={e => setAddUserEmail(e.target.value)}
+                            placeholder="utilizador@empresa.com" style={{ ...s.ingestInput, width: "100%", boxSizing: "border-box" as const }} />
+                        </div>
+                        <div>
+                          <label style={{ ...s.ingestLabel, display: "block", marginBottom: 6 }}>Papel</label>
+                          <select value={addUserRole}
+                            onChange={e => { setAddUserRole(e.target.value); setAddUserAccesses(DEFAULT_ACCESSES[e.target.value] ?? []); }}
+                            style={{ ...s.ingestInput, width: "100%", boxSizing: "border-box" as const }}>
+                            <option value="admin">Admin — acesso total</option>
+                            <option value="operator">Operator — aprovar e ingerir</option>
+                            <option value="viewer">Viewer — somente leitura</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {addUserTab === "area" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                        <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginBottom: 8 }}>Seleccione a área (workspace) a que este utilizador pertence.</p>
+                        {[{ id: null, name: "Principal" }, ...workspaces].map(ws => (
+                          <label key={ws.id ?? "principal"} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
+                            borderRadius: 10, border: `1px solid ${addUserWorkspace === ws.id ? "var(--accent)" : "var(--border)"}`,
+                            backgroundColor: addUserWorkspace === ws.id ? "var(--accent-subtle)" : "var(--bg-surface-2)", cursor: "pointer" }}>
+                            <input type="radio" name="workspace" checked={addUserWorkspace === ws.id}
+                              onChange={() => setAddUserWorkspace(ws.id)}
+                              style={{ accentColor: "var(--accent)" }} />
+                            <span style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)" }}>{ws.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+
+                    {addUserTab === "acessos" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginBottom: 8 }}>
+                          Defina quais menus este utilizador pode aceder. Os valores foram pré-definidos com base no papel seleccionado.
+                        </p>
+                        {USER_MENUS.map(menu => (
+                          <label key={menu.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px",
+                            borderRadius: 8, border: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", cursor: "pointer" }}>
+                            <input type="checkbox" checked={addUserAccesses.includes(menu.key)}
+                              onChange={e => setAddUserAccesses(prev =>
+                                e.target.checked ? [...prev, menu.key] : prev.filter(k => k !== menu.key)
+                              )}
+                              style={{ accentColor: "var(--accent)", width: 16, height: 16 }} />
+                            <span style={{ fontSize: "0.88rem", color: "var(--text-primary)", fontWeight: 500 }}>{menu.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Modal Footer */}
+                  <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                    <button onClick={() => setShowAddUserModal(false)}
+                      style={{ padding: "9px 20px", borderRadius: 10, border: "1px solid var(--border)", background: "none",
+                        color: "var(--text-secondary)", fontSize: "0.84rem", cursor: "pointer" }}>
+                      Cancelar
+                    </button>
+                    <button onClick={handleAddUserSubmit} disabled={addUserSaving || !addUserEmail}
+                      style={{ ...s.ingestBtn, padding: "9px 24px", opacity: addUserSaving || !addUserEmail ? 0.6 : 1 }}>
+                      {addUserSaving ? "A guardar..." : "Guardar"}
                     </button>
                   </div>
                 </div>
-              )}
-
-              {/* Lista de membros — usa tenant_members para Principal, workspace_members para outros */}
-              {(() => {
-                const list = activeWorkspace
-                  ? workspaceMembers.map(m => ({ email: m.email, role: m.role, extra: m.accepted ? "✓" : "(convite pendente)" }))
-                  : members.map(m => ({ email: m.email, role: m.role, extra: "" }));
-
-                if (list.length === 0) {
-                  return <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
-                    {activeWorkspace ? "Sem membros neste espaço de trabalho." : "Sem membros no tenant."}
-                  </p>;
-                }
-                return (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {list.map((member, i) => (
-                      <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-                        backgroundColor: "var(--bg-surface-2)", padding: "12px 14px", borderRadius: 8, border: "1px solid var(--border)" }}>
-                        <div>
-                          <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)" }}>{member.email}</p>
-                          <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                            {member.role.toUpperCase()} {member.extra}
-                          </p>
-                        </div>
-                        {activeWorkspace && (
-                          <button onClick={() => handleRemoveWorkspaceMember(activeWorkspace, member.email)}
-                            style={{ fontSize: "0.78rem", padding: "6px 12px", borderRadius: 6, border: "none",
-                              backgroundColor: "var(--danger-subtle)", color: "var(--danger-text)", cursor: "pointer" }}>
-                            Remover
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </div>
+              </div>
+            )}
           </div>
 
         ) : tab === "admin" ? (
@@ -2753,80 +2897,6 @@ export default function DashboardClient({ token: _token, userName }: { token: st
               </div>
             </div>
 
-            {/* ── Equipa ── */}
-            <div style={s.settingsCard}>
-              <p style={s.settingsTitle}>Equipa</p>
-              <p style={s.settingsDesc}>Gerencie quem acessa este tenant e com qual papel.</p>
-
-              {/* Role legend */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" as const }}>
-                {[
-                  { role: "admin",    color: "#6d28d9", bg: "#ede9fe", label: "Admin — acesso total" },
-                  { role: "operator", color: "var(--accent)", bg: "var(--accent-subtle)", label: "Operator — aprovar e ingerir" },
-                  { role: "viewer",   color: "var(--text-muted)", bg: "var(--bg-surface-2)", label: "Viewer — somente leitura" },
-                ].map(({ role, color, bg, label }) => (
-                  <span key={role} style={{ fontSize: "0.68rem", fontWeight: 700, padding: "3px 10px", borderRadius: 20, background: bg, color, border: "1px solid var(--border)", whiteSpace: "nowrap" as const }}>{label}</span>
-                ))}
-              </div>
-
-              {/* Members list */}
-              {!membersLoaded ? (
-                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: 12 }}>A carregar...</p>
-              ) : members.length === 0 ? (
-                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: 12 }}>Nenhum membro adicionado ainda. O proprietário da conta sempre tem papel admin.</p>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
-                  {members.map(m => (
-                    <div key={m.email} style={s.keyRow}>
-                      <div>
-                        <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>{m.email}</p>
-                        <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>Convidado por {m.invited_by || "—"}</p>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <select
-                          value={m.role}
-                          onChange={e => handleChangeMemberRole(m.email, e.target.value)}
-                          style={{ fontSize: "0.78rem", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 8px", background: "var(--bg-surface-2)", color: "var(--text-secondary)", cursor: "pointer" }}
-                        >
-                          <option value="admin">admin</option>
-                          <option value="operator">operator</option>
-                          <option value="viewer">viewer</option>
-                        </select>
-                        <button onClick={() => handleRemoveMember(m.email)} style={s.revokeBtn}>Remover</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Invite form */}
-              {memberError && <p style={{ fontSize: "0.78rem", color: "var(--danger)", marginBottom: 8 }}>{memberError}</p>}
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const }}>
-                <input
-                  type="email"
-                  placeholder="email@empresa.com"
-                  value={newMember.email}
-                  onChange={e => setNewMember(p => ({ ...p, email: e.target.value }))}
-                  style={{ ...s.ingestInput, flex: 1, minWidth: 200 }}
-                />
-                <select
-                  value={newMember.role}
-                  onChange={e => setNewMember(p => ({ ...p, role: e.target.value }))}
-                  style={{ fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", background: "var(--bg-surface-2)", color: "var(--text-secondary)", cursor: "pointer" }}
-                >
-                  <option value="operator">operator</option>
-                  <option value="viewer">viewer</option>
-                  <option value="admin">admin</option>
-                </select>
-                <button
-                  onClick={handleAddMember}
-                  disabled={memberSaving || !newMember.email}
-                  style={{ ...s.ingestBtn, opacity: memberSaving || !newMember.email ? 0.6 : 1 }}
-                >
-                  {memberSaving ? "Adicionando..." : "Adicionar membro"}
-                </button>
-              </div>
-            </div>
           </div>
         )}
       </main>
