@@ -1239,10 +1239,10 @@ def delete_field_schema(tenant_id: str, field_key: str, workspace_id: int | None
 # --- admin_plan_configs ---
 
 _PLAN_DEFAULTS: list[dict] = [
-    {"plan_name": "starter",      "field_limit": 5,   "price_monthly": 0.0,    "stripe_price_id": None, "records_per_month": 0,      "api_keys_limit": 1,   "diagnoses_per_month": 50},
-    {"plan_name": "pro",          "field_limit": 15,  "price_monthly": 497.0,  "stripe_price_id": None, "records_per_month": 50000,  "api_keys_limit": 5,   "diagnoses_per_month": 0},
-    {"plan_name": "professional", "field_limit": 20,  "price_monthly": 1490.0, "stripe_price_id": None, "records_per_month": 200000, "api_keys_limit": 20,  "diagnoses_per_month": 0},
-    {"plan_name": "enterprise",   "field_limit": 999, "price_monthly": 0.0,    "stripe_price_id": None, "records_per_month": 0,      "api_keys_limit": 999, "diagnoses_per_month": 0},
+    {"plan_name": "starter",      "field_limit": 5,   "price_monthly": 0.0,    "stripe_price_id": None, "records_per_month": 0,      "api_keys_limit": 1,   "diagnoses_per_month": 50,  "workspaces_limit": 1},
+    {"plan_name": "pro",          "field_limit": 15,  "price_monthly": 497.0,  "stripe_price_id": None, "records_per_month": 50000,  "api_keys_limit": 5,   "diagnoses_per_month": 0,   "workspaces_limit": 3},
+    {"plan_name": "professional", "field_limit": 20,  "price_monthly": 1490.0, "stripe_price_id": None, "records_per_month": 200000, "api_keys_limit": 20,  "diagnoses_per_month": 0,   "workspaces_limit": 10},
+    {"plan_name": "enterprise",   "field_limit": 999, "price_monthly": 0.0,    "stripe_price_id": None, "records_per_month": 0,      "api_keys_limit": 999, "diagnoses_per_month": 0,   "workspaces_limit": 999},
 ]
 
 
@@ -1250,7 +1250,7 @@ def get_plan_configs() -> list[dict]:
     if USE_SUPABASE:
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/admin_plan_configs",
-            params={"select": "plan_name,field_limit,price_monthly,stripe_price_id,records_per_month,api_keys_limit,diagnoses_per_month",
+            params={"select": "plan_name,field_limit,price_monthly,stripe_price_id,records_per_month,api_keys_limit,diagnoses_per_month,workspaces_limit",
                     "order": "plan_name.asc"},
             headers=_HEADERS, timeout=10,
         )
@@ -1263,6 +1263,7 @@ def get_plan_configs() -> list[dict]:
 def upsert_plan_config(
     plan_name: str, field_limit: int, price_monthly: float, stripe_price_id: str | None,
     records_per_month: int = 0, api_keys_limit: int = 1, diagnoses_per_month: int = 0,
+    workspaces_limit: int = 1,
 ) -> None:
     PLAN_LIMITS[plan_name] = field_limit
     if USE_SUPABASE:
@@ -1271,7 +1272,7 @@ def upsert_plan_config(
             json={"plan_name": plan_name, "field_limit": field_limit,
                   "price_monthly": price_monthly, "stripe_price_id": stripe_price_id,
                   "records_per_month": records_per_month, "api_keys_limit": api_keys_limit,
-                  "diagnoses_per_month": diagnoses_per_month,
+                  "diagnoses_per_month": diagnoses_per_month, "workspaces_limit": workspaces_limit,
                   "updated_at": datetime.now(timezone.utc).isoformat()},
             headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
             params={"on_conflict": "plan_name"}, timeout=10,

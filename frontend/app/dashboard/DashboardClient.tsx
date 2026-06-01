@@ -13,7 +13,7 @@ type QueueItem      = { name: string; email_hint: string; cpf_hint: string; lega
 type AuditLogEntry  = { id: number; operator_email: string; record_name: string; action: string; fields_affected: string | Record<string, unknown>; created_at: string };
 type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown>; is_sensitive: boolean };
 type PlanInfo       = { plan: string; field_limit: number; field_count: number };
-type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number };
+type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; workspaces_limit: number };
 type EnterpriseConfig  = { tenant_id: string; stripe_price_id: string; amount_display: number; currency_display: string };
 type TenantOption      = { tenant_id: string; company_name: string | null; plan: string; subscription_status: string | null };
 type SubscriptionInfo = {
@@ -568,6 +568,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
         records_per_month: cfg.records_per_month ?? 0,
         api_keys_limit: cfg.api_keys_limit ?? 1,
         diagnoses_per_month: cfg.diagnoses_per_month ?? 0,
+        workspaces_limit: cfg.workspaces_limit ?? 1,
       }),
     });
     if (res.ok) {
@@ -2592,6 +2593,11 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                               <label style={s.ingestLabel}>Diagnósticos/mês (0=ilimitado)</label>
                               <input type="number" min={0} style={s.ingestInput} value={edit.diagnoses_per_month ?? 0}
                                 onChange={e => setEditPlan(p => ({ ...p, [cfg.plan_name]: { ...edit, diagnoses_per_month: Number(e.target.value) } }))} />
+                            </div>
+                            <div>
+                              <label style={s.ingestLabel}>Workspaces máx. (999=ilimitado)</label>
+                              <input type="number" min={1} style={s.ingestInput} value={edit.workspaces_limit ?? 1}
+                                onChange={e => setEditPlan(p => ({ ...p, [cfg.plan_name]: { ...edit, workspaces_limit: Number(e.target.value) } }))} />
                             </div>
                           </div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>

@@ -425,6 +425,7 @@ class PlanConfigIn(BaseModel):
     records_per_month: int = 0
     api_keys_limit: int = 1
     diagnoses_per_month: int = 0
+    workspaces_limit: int = 1
 
 
 class SecretIn(BaseModel):
@@ -982,6 +983,7 @@ def atualizar_plano(plan_name: str, body: PlanConfigIn):
     repository.upsert_plan_config(
         plan_name, body.field_limit, body.price_monthly, body.stripe_price_id,
         body.records_per_month, body.api_keys_limit, body.diagnoses_per_month,
+        body.workspaces_limit,
     )
     return repository.get_plan_configs()
 
