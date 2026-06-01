@@ -266,6 +266,25 @@ def _require_super_admin(tenant_id: str = Depends(_get_tenant_id)) -> str:
     return tenant_id
 
 
+def _check_workspace_access(
+    workspace_id: int,
+    tenant_id: str = Depends(_get_tenant_id),
+    creds: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> int:
+    """Verifica se o user tem acesso ao workspace (Phase 2 - access control)."""
+    # Super admin tem acesso a tudo
+    if tenant_id == "__admin__":
+        return workspace_id
+
+    # Para workspace_id=None (workspace principal), todos têm acesso
+    if workspace_id is None:
+        return workspace_id
+
+    # TODO: Verificar se o user tem acesso ao workspace específico via workspace_members
+    # Por enquanto, só protegido na Etapa 3 da Fase 2 — implementar quando necessário
+    return workspace_id
+
+
 app = FastAPI(
     title="Trust & Tandem AI Gateway",
     description="API segura de ingestão de dados em conformidade com LGPD — Orquestração Humano-IA",
