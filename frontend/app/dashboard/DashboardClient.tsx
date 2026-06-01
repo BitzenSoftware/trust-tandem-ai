@@ -113,6 +113,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [newWsName,     setNewWsName]     = useState("");
   const [newWsDesc,     setNewWsDesc]     = useState("");
   const [wsSaving,      setWsSaving]      = useState(false);
+  const [wsError,       setWsError]       = useState("");
   const [planConfigs,   setPlanConfigs]   = useState<PlanConfig[]>([]);
   const [planSaving,    setPlanSaving]    = useState<Record<string, boolean>>({});
   const [planSaved,     setPlanSaved]     = useState<Record<string, boolean>>({});
@@ -2981,6 +2982,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                       onClick={async () => {
                         if (!newWsName.trim()) return;
                         setWsSaving(true);
+                        setWsError("");
                         const h = await getFreshHeaders();
                         if (!h) { setWsSaving(false); return; }
                         try {
@@ -2992,8 +2994,11 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                             setNewWsName(""); setNewWsDesc("");
                             const wsRes = await apiFetch(`${API}/workspaces`, { headers: h });
                             if (wsRes.ok) setWorkspaces(await wsRes.json());
+                          } else {
+                            const b = await res.json().catch(() => ({}));
+                            setWsError(b.detail || `Erro ${res.status}`);
                           }
-                        } catch { /* ignore */ }
+                        } catch (e) { setWsError("Erro de conexão."); }
                         finally { setWsSaving(false); }
                       }}
                       disabled={wsSaving || !newWsName.trim()}
@@ -3001,8 +3006,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                       {wsSaving ? "A criar..." : "Criar Workspace"}
                     </button>
                   </div>
-                  {/* inline error shown if creation fails */}
-                  <p id="ws-error" style={{ fontSize: "0.78rem", color: "var(--danger, #dc2626)", marginTop: 8, display: "none" }}></p>
+                  {wsError && <p style={{ fontSize: "0.78rem", color: "var(--danger, #dc2626)", marginTop: 8 }}>{wsError}</p>}
                 </div>
 
                 {/* Lista de workspaces */}
