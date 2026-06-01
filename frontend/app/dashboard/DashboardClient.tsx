@@ -2278,69 +2278,74 @@ export default function DashboardClient({ token: _token, userName }: { token: st
         ) : tab === "users" ? (
           /* ── UTILIZADORES ── */
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {workspacesLoaded && workspaces.length > 0 && activeWorkspace ? (
-              <>
-                <div style={s.card}>
-                  <h2 style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 16 }}>
-                    Membros de {workspaces.find(w => w.id === activeWorkspace)?.name}
-                  </h2>
+            <div style={s.card}>
+              <h2 style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 16 }}>
+                Membros — {activeWorkspace ? (workspaces.find(w => w.id === activeWorkspace)?.name ?? "Workspace") : "Principal"}
+              </h2>
 
-                  {/* Convite */}
-                  <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid var(--border)" }}>
-                    <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 12 }}>Convidar novo membro</p>
-                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-                      <div style={{ flex: 1 }}>
-                        <label style={s.ingestLabel}>E-mail</label>
-                        <input type="email" style={s.ingestInput} placeholder="utilizador@empresa.com"
-                          value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} />
-                      </div>
-                      <div>
-                        <label style={s.ingestLabel} htmlFor="invite-role">Role</label>
-                        <select id="invite-role" style={{ ...s.ingestInput, padding: "10px 14px" }}
-                          value={inviteRole} onChange={e => setInviteRole(e.target.value)}>
-                          <option value="admin">Admin</option>
-                          <option value="operator">Operator</option>
-                          <option value="viewer">Viewer</option>
-                        </select>
-                      </div>
-                      <button onClick={() => handleInviteWorkspaceMember(activeWorkspace)}
-                        disabled={inviteLoading || !inviteEmail}
-                        style={{ ...s.ingestBtn, opacity: inviteLoading || !inviteEmail ? 0.6 : 1, whiteSpace: "nowrap" as const }}>
-                        {inviteLoading ? "A convidar..." : "Convidar"}
-                      </button>
+              {/* Convidar — só para workspace específico */}
+              {activeWorkspace && (
+                <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid var(--border)" }}>
+                  <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 12 }}>Convidar novo membro</p>
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={s.ingestLabel}>E-mail</label>
+                      <input type="email" style={s.ingestInput} placeholder="utilizador@empresa.com"
+                        value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} />
                     </div>
+                    <div>
+                      <label style={s.ingestLabel} htmlFor="invite-role">Role</label>
+                      <select id="invite-role" style={{ ...s.ingestInput, padding: "10px 14px" }}
+                        value={inviteRole} onChange={e => setInviteRole(e.target.value)}>
+                        <option value="admin">Admin</option>
+                        <option value="operator">Operator</option>
+                        <option value="viewer">Viewer</option>
+                      </select>
+                    </div>
+                    <button onClick={() => handleInviteWorkspaceMember(activeWorkspace)}
+                      disabled={inviteLoading || !inviteEmail}
+                      style={{ ...s.ingestBtn, opacity: inviteLoading || !inviteEmail ? 0.6 : 1, whiteSpace: "nowrap" as const }}>
+                      {inviteLoading ? "A convidar..." : "Convidar"}
+                    </button>
                   </div>
+                </div>
+              )}
 
-                  {/* Lista de membros */}
-                  {workspaceMembers.length === 0 ? (
-                    <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>Sem membros neste espaço de trabalho.</p>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      {workspaceMembers.map(member => (
-                        <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-                          backgroundColor: "var(--bg-surface-2)", padding: "12px 14px", borderRadius: 8, border: "1px solid var(--border)" }}>
-                          <div>
-                            <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)" }}>{member.email}</p>
-                            <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                              {member.role.toUpperCase()} {member.accepted ? "✓" : "(convite pendente)"}
-                            </p>
-                          </div>
+              {/* Lista de membros — usa tenant_members para Principal, workspace_members para outros */}
+              {(() => {
+                const list = activeWorkspace
+                  ? workspaceMembers.map(m => ({ email: m.email, role: m.role, extra: m.accepted ? "✓" : "(convite pendente)" }))
+                  : members.map(m => ({ email: m.email, role: m.role, extra: "" }));
+
+                if (list.length === 0) {
+                  return <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+                    {activeWorkspace ? "Sem membros neste espaço de trabalho." : "Sem membros no tenant."}
+                  </p>;
+                }
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {list.map((member, i) => (
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                        backgroundColor: "var(--bg-surface-2)", padding: "12px 14px", borderRadius: 8, border: "1px solid var(--border)" }}>
+                        <div>
+                          <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)" }}>{member.email}</p>
+                          <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                            {member.role.toUpperCase()} {member.extra}
+                          </p>
+                        </div>
+                        {activeWorkspace && (
                           <button onClick={() => handleRemoveWorkspaceMember(activeWorkspace, member.email)}
                             style={{ fontSize: "0.78rem", padding: "6px 12px", borderRadius: 6, border: "none",
                               backgroundColor: "var(--danger-subtle)", color: "var(--danger-text)", cursor: "pointer" }}>
                             Remover
                           </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div style={s.card}>
-                <p style={{ color: "var(--text-muted)" }}>A carregar espaços de trabalho...</p>
-              </div>
-            )}
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
           </div>
 
         ) : tab === "admin" ? (
