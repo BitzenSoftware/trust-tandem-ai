@@ -1207,11 +1207,22 @@ def get_enterprise_tier_by_id(tier_id: int) -> dict | None:
     return None
 
 
-def upsert_enterprise_tier_price(tier_id: int, stripe_price_id: str | None, price_monthly: float | None = None) -> None:
+def upsert_enterprise_tier_price(
+    tier_id: int,
+    stripe_price_id: str | None,
+    price_monthly: float | None = None,
+    records_per_month: int | None = None,
+    api_keys_limit: int | None = None,
+    diagnoses_per_month: int | None = None,
+    field_limit: int | None = None,
+) -> None:
     if USE_SUPABASE:
         payload: dict = {"stripe_price_id": stripe_price_id}
-        if price_monthly is not None:
-            payload["price_monthly"] = price_monthly
+        if price_monthly       is not None: payload["price_monthly"]       = price_monthly
+        if records_per_month   is not None: payload["records_per_month"]   = records_per_month
+        if api_keys_limit      is not None: payload["api_keys_limit"]      = api_keys_limit
+        if diagnoses_per_month is not None: payload["diagnoses_per_month"] = diagnoses_per_month
+        if field_limit         is not None: payload["field_limit"]         = field_limit
         _http.patch(
             f"{_SUPABASE_URL}/rest/v1/enterprise_tiers",
             json=payload,
