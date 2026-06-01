@@ -1339,13 +1339,13 @@ def enterprise_tiers_publicos():
     return JSONResponse(tiers)
 
 
-@_router.get("/enterprise-tiers", summary="Lista tiers Enterprise (admin: inclui inactivos)",
+@_router.get("/admin/enterprise-tiers", summary="Lista tiers Enterprise (admin: inclui inactivos)",
              dependencies=[Depends(_require_super_admin)])
 def listar_enterprise_tiers_admin():
     return repository.get_enterprise_tiers(active_only=False)
 
 
-@_router.patch("/enterprise-tiers/{tier_id}", summary="Actualiza stripe_price_id e preço de um tier [super admin]",
+@_router.patch("/admin/enterprise-tiers/{tier_id}", summary="Actualiza stripe_price_id e preço de um tier [super admin]",
                dependencies=[Depends(_require_super_admin)])
 def actualizar_enterprise_tier(tier_id: int, body: EnterpriseTierPriceIn):
     repository.upsert_enterprise_tier_price(tier_id, body.stripe_price_id, body.price_monthly)
