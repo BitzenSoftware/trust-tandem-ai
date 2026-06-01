@@ -13,7 +13,7 @@ type QueueItem      = { name: string; email_hint: string; cpf_hint: string; lega
 type AuditLogEntry  = { id: number; operator_email: string; record_name: string; action: string; fields_affected: string | Record<string, unknown>; created_at: string };
 type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown>; is_sensitive: boolean };
 type PlanInfo       = { plan: string; field_limit: number; field_count: number };
-type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null };
+type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number };
 type EnterpriseConfig  = { tenant_id: string; stripe_price_id: string; amount_display: number; currency_display: string };
 type TenantOption      = { tenant_id: string; company_name: string | null; plan: string; subscription_status: string | null };
 type SubscriptionInfo = {
@@ -73,7 +73,7 @@ function MoonIcon() {
   );
 }
 
-export default function DashboardClient({ token, userName }: { token: string; userName: string }) {
+export default function DashboardClient({ token: _token, userName }: { token: string; userName: string }) {
   const router = useRouter();
   const { t } = useTranslation();
   const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "schema" | "audit" | "admin" | "subscription">("dashboard");
@@ -153,7 +153,6 @@ export default function DashboardClient({ token, userName }: { token: string; us
   const [memberError,       setMemberError]       = useState("");
   const [pendingApproval,   setPendingApproval]   = useState<{ name: string; email_hint: string; cpf_hint: string; operator_approved_by: string | null }[]>([]);
   const [adminApproveLoading, setAdminApproveLoading] = useState<Record<string, boolean>>({});
-  const [ripdLoading, setRipdLoading] = useState(false);
 
   // ── Queue pagination ─────────────────────────────────────────────────────
   const QUEUE_PAGE_SIZE = 50;
@@ -393,7 +392,12 @@ export default function DashboardClient({ token, userName }: { token: string; us
     if (!h) { setPlanSaving(p => ({ ...p, [plan_name]: false })); return; }
     const res = await apiFetch(`${API}/admin/plans/${plan_name}`, {
       method: "PUT", headers: h,
-      body: JSON.stringify({ field_limit: cfg.field_limit, price_monthly: cfg.price_monthly, stripe_price_id: cfg.stripe_price_id }),
+      body: JSON.stringify({
+        field_limit: cfg.field_limit, price_monthly: cfg.price_monthly, stripe_price_id: cfg.stripe_price_id,
+        records_per_month: cfg.records_per_month ?? 0,
+        api_keys_limit: cfg.api_keys_limit ?? 1,
+        diagnoses_per_month: cfg.diagnoses_per_month ?? 0,
+      }),
     });
     if (res.ok) {
       const updated: PlanConfig[] = await res.json();
@@ -1091,25 +1095,6 @@ export default function DashboardClient({ token, userName }: { token: string; us
     );
   }
 
-  async function handleRipd() {
-    setRipdLoading(true);
-    const h = await getFreshHeaders();
-    if (!h) { setRipdLoading(false); return; }
-    try {
-      const res = await fetch(`${API}/ripd`, { headers: h });
-      if (res.ok) {
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `RIPD_${new Date().toISOString().slice(0, 10)}.pdf`;
-        a.click();
-        URL.revokeObjectURL(url);
-      }
-    } catch { /* silent */ }
-    finally { setRipdLoading(false); }
-  }
-
   return (
     <div style={s.page}>
       {/* Header */}
@@ -1292,13 +1277,6 @@ export default function DashboardClient({ token, userName }: { token: string; us
                       style={{ padding: "6px 14px", fontSize: "0.8rem", fontWeight: 600, color: "var(--accent)", background: "none", border: "1px solid var(--accent)", borderRadius: 8, cursor: exportProgress ? "not-allowed" : "pointer", opacity: exportProgress ? 0.6 : 1 }}
                     >
                       ↓ {t.dashboard.exportCsv}
-                    </button>
-                    <button
-                      onClick={handleRipd}
-                      disabled={ripdLoading}
-                      style={{ padding: "6px 14px", fontSize: "0.8rem", fontWeight: 600, color: "#6366f1", background: "none", border: "1px solid #6366f1", borderRadius: 8, cursor: ripdLoading ? "not-allowed" : "pointer", opacity: ripdLoading ? 0.6 : 1 }}
-                    >
-                      {ripdLoading ? "..." : "↓ RIPD PDF"}
                     </button>
                   </div>
                 )}
@@ -2064,6 +2042,23 @@ export default function DashboardClient({ token, userName }: { token: string; us
                                 {t.admin.manageEnterpriseClients} →
                               </button>
                             )}
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+                            <div>
+                              <label style={s.ingestLabel}>Registros/mês (0=ilimitado)</label>
+                              <input type="number" min={0} step={1000} style={s.ingestInput} value={edit.records_per_month ?? 0}
+                                onChange={e => setEditPlan(p => ({ ...p, [cfg.plan_name]: { ...edit, records_per_month: Number(e.target.value) } }))} />
+                            </div>
+                            <div>
+                              <label style={s.ingestLabel}>API Keys máx.</label>
+                              <input type="number" min={1} style={s.ingestInput} value={edit.api_keys_limit ?? 1}
+                                onChange={e => setEditPlan(p => ({ ...p, [cfg.plan_name]: { ...edit, api_keys_limit: Number(e.target.value) } }))} />
+                            </div>
+                            <div>
+                              <label style={s.ingestLabel}>Diagnósticos/mês (0=ilimitado)</label>
+                              <input type="number" min={0} style={s.ingestInput} value={edit.diagnoses_per_month ?? 0}
+                                onChange={e => setEditPlan(p => ({ ...p, [cfg.plan_name]: { ...edit, diagnoses_per_month: Number(e.target.value) } }))} />
+                            </div>
                           </div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>
                             <div>
