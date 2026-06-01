@@ -338,7 +338,7 @@ def save_to_queue(record: dict, tenant_id: str = "default") -> None:
         )
 
 
-def save_bulk(records: list[dict], tenant_id: str = "default") -> None:
+def save_bulk(records: list[dict], tenant_id: str = "default", workspace_id: int | None = None) -> None:
     """Bulk-insert into clean_records — one HTTP call regardless of record count."""
     if not records:
         return
@@ -347,11 +347,14 @@ def save_bulk(records: list[dict], tenant_id: str = "default") -> None:
         for record in records:
             legal_basis = record.get("legal_basis")
             extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
-            payload.append({
+            row = {
                 "tenant_id": tenant_id, "name": record["name"],
                 "email": record["email"], "cpf": record["cpf"],
                 "extra_fields": extra or {}, "legal_basis": legal_basis,
-            })
+            }
+            if workspace_id is not None:
+                row["workspace_id"] = workspace_id
+            payload.append(row)
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/clean_records",
             json=payload, headers=_HEADERS, timeout=30,
@@ -362,13 +365,19 @@ def save_bulk(records: list[dict], tenant_id: str = "default") -> None:
         for record in records:
             legal_basis = record.get("legal_basis")
             extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
-            conn.execute(
-                "INSERT INTO clean_records (tenant_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?)",
-                (tenant_id, record["name"], record["email"], record["cpf"], json.dumps(extra), legal_basis),
-            )
+            if workspace_id is not None:
+                conn.execute(
+                    "INSERT INTO clean_records (tenant_id, workspace_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (tenant_id, workspace_id, record["name"], record["email"], record["cpf"], json.dumps(extra), legal_basis),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO clean_records (tenant_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?)",
+                    (tenant_id, record["name"], record["email"], record["cpf"], json.dumps(extra), legal_basis),
+                )
 
 
-def save_to_queue_bulk(records: list[dict], tenant_id: str = "default") -> None:
+def save_to_queue_bulk(records: list[dict], tenant_id: str = "default", workspace_id: int | None = None) -> None:
     """Bulk-insert into review_queue — one HTTP call regardless of record count."""
     if not records:
         return
@@ -377,12 +386,15 @@ def save_to_queue_bulk(records: list[dict], tenant_id: str = "default") -> None:
         for record in records:
             legal_basis = record.get("legal_basis")
             extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
-            payload.append({
+            row = {
                 "tenant_id": tenant_id, "name": record["name"],
                 "email": record.get("email"), "cpf": record.get("cpf"),
                 "extra_fields": extra or {}, "legal_basis": legal_basis,
                 "status": "PENDING",
-            })
+            }
+            if workspace_id is not None:
+                row["workspace_id"] = workspace_id
+            payload.append(row)
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/review_queue",
             json=payload, headers=_HEADERS, timeout=30,
@@ -393,19 +405,29 @@ def save_to_queue_bulk(records: list[dict], tenant_id: str = "default") -> None:
         for record in records:
             legal_basis = record.get("legal_basis")
             extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
-            conn.execute(
-                "INSERT INTO review_queue (tenant_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?)",
-                (tenant_id, record["name"], record.get("email"), record.get("cpf"), json.dumps(extra), legal_basis),
-            )
+            if workspace_id is not None:
+                conn.execute(
+                    "INSERT INTO review_queue (tenant_id, workspace_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (tenant_id, workspace_id, record["name"], record.get("email"), record.get("cpf"), json.dumps(extra), legal_basis),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO review_queue (tenant_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?)",
+                    (tenant_id, record["name"], record.get("email"), record.get("cpf"), json.dumps(extra), legal_basis),
+                )
 
 
-def get_queue(tenant_id: str = "default", status: str = "PENDING") -> list[dict]:
+def get_queue(tenant_id: str = "default", status: str = "PENDING", workspace_id: int | None = None) -> list[dict]:
     if USE_SUPABASE:
         params: dict = {
             "select": "name,email,cpf,extra_fields,legal_basis,status,operator_approved_by",
             "order": "id.asc",
             "tenant_id": f"eq.{tenant_id}",
         }
+        if workspace_id is not None:
+            params["workspace_id"] = f"eq.{workspace_id}"
+        else:
+            params["workspace_id"] = "is.null"
         if status == "PENDING":
             params["or"] = f"(status.eq.PENDING,status.is.null)"
         elif status != "ALL":
