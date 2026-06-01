@@ -1964,35 +1964,55 @@ export default function DashboardClient({ token: _token, userName }: { token: st
             <div style={s.settingsCard}>
               <p style={s.settingsTitle}>{t.subscription.compareTitle}</p>
               <div style={{ overflowX: "auto" as const }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: "0.83rem" }}>
-                  <thead>
-                    <tr>
-                      {["", "Starter", "Pro", "Enterprise"].map(h => (
-                        <th key={h} style={{ padding: "8px 14px", textAlign: h === "" ? "left" as const : "center" as const, color: "var(--text-secondary)", fontWeight: 600, borderBottom: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)" }}>
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      { label: t.subscription.price,      vals: [`${t.subscription.freePrice}`, `R$${publicPlans.find(p=>p.plan_name==="pro")?.price_monthly??49}${t.subscription.perMonth}`, `R$${publicPlans.find(p=>p.plan_name==="enterprise")?.price_monthly??199}${t.subscription.perMonth}`] },
-                      { label: t.subscription.fieldLimit, vals: [`${publicPlans.find(p=>p.plan_name==="starter")?.field_limit??5}`, `${publicPlans.find(p=>p.plan_name==="pro")?.field_limit??15}`, t.subscription.unlimited] },
-                      { label: t.subscription.feat_lgpd,  vals: ["✓", "✓", "✓"] },
-                      { label: t.subscription.feat_fields,vals: ["✓", "✓", "✓"] },
-                      { label: t.subscription.feat_webhook,vals: ["—", "✓", "✓"] },
-                      { label: t.subscription.feat_bulk,  vals: ["—", "✓", "✓"] },
-                      { label: t.subscription.feat_support,vals: ["—", "—", "✓"] },
-                    ].map((row, i) => (
-                      <tr key={i} style={{ backgroundColor: i % 2 === 0 ? "transparent" : "var(--bg-surface-2)" }}>
-                        <td style={{ padding: "9px 14px", color: "var(--text-primary)", fontWeight: 500 }}>{row.label}</td>
-                        {row.vals.map((v, j) => (
-                          <td key={j} style={{ padding: "9px 14px", textAlign: "center" as const, color: v === "—" ? "var(--text-muted)" : v === "✓" ? "var(--success-text)" : "var(--text-primary)", fontWeight: v === "✓" ? 600 : 400 }}>{v}</td>
+                {(() => {
+                  const pl = (name: string) => publicPlans.find(p => p.plan_name === name);
+                  const fmtRec  = (n?: number) => !n || n === 0 ? "Ilimitado" : n.toLocaleString("pt-BR");
+                  const fmtKeys = (n?: number) => !n || n >= 999 ? "Ilimitado" : String(n);
+                  const fmtDiag = (n?: number) => !n || n === 0 ? "Ilimitado" : String(n);
+                  const fmtPrice = (name: string, fallback: number) => {
+                    if (name === "starter")    return t.subscription.freePrice;
+                    if (name === "enterprise") return "Sob consulta";
+                    const v = pl(name)?.price_monthly ?? fallback;
+                    return `R$${v.toLocaleString("pt-BR")}${t.subscription.perMonth}`;
+                  };
+                  const cols = ["Trial", "Business", "Professional", "Enterprise"];
+                  const names = ["starter", "pro", "professional", "enterprise"];
+                  const rows: { label: string; vals: string[] }[] = [
+                    { label: t.subscription.price,        vals: names.map(n => fmtPrice(n, n === "pro" ? 497 : 1490)) },
+                    { label: "Registros/mês",             vals: [fmtRec(pl("starter")?.records_per_month ?? 0), fmtRec(pl("pro")?.records_per_month ?? 50000), fmtRec(pl("professional")?.records_per_month ?? 200000), "Ilimitado"] },
+                    { label: "API Keys",                  vals: [fmtKeys(pl("starter")?.api_keys_limit ?? 1), fmtKeys(pl("pro")?.api_keys_limit ?? 5), fmtKeys(pl("professional")?.api_keys_limit ?? 20), "Ilimitado"] },
+                    { label: "Diagnósticos/mês",          vals: [fmtDiag(pl("starter")?.diagnoses_per_month ?? 50), "Ilimitado", "Ilimitado", "Ilimitado"] },
+                    { label: t.subscription.fieldLimit,   vals: [String(pl("starter")?.field_limit ?? 5), String(pl("pro")?.field_limit ?? 15), String(pl("professional")?.field_limit ?? 20), "Ilimitado"] },
+                    { label: t.subscription.feat_lgpd,    vals: ["✓", "✓", "✓", "✓"] },
+                    { label: t.subscription.feat_fields,  vals: ["✓", "✓", "✓", "✓"] },
+                    { label: t.subscription.feat_webhook, vals: ["—", "✓", "✓", "✓"] },
+                    { label: t.subscription.feat_bulk,    vals: ["—", "✓", "✓", "✓"] },
+                    { label: t.subscription.feat_support, vals: ["—", "—", "✓", "✓"] },
+                  ];
+                  return (
+                    <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: "0.83rem" }}>
+                      <thead>
+                        <tr>
+                          {["", ...cols].map(h => (
+                            <th key={h} style={{ padding: "8px 14px", textAlign: h === "" ? "left" as const : "center" as const, color: "var(--text-secondary)", fontWeight: 600, borderBottom: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", whiteSpace: "nowrap" as const }}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((row, i) => (
+                          <tr key={i} style={{ backgroundColor: i % 2 === 0 ? "transparent" : "var(--bg-surface-2)" }}>
+                            <td style={{ padding: "9px 14px", color: "var(--text-primary)", fontWeight: 500, whiteSpace: "nowrap" as const }}>{row.label}</td>
+                            {row.vals.map((v, j) => (
+                              <td key={j} style={{ padding: "9px 14px", textAlign: "center" as const, color: v === "—" ? "var(--text-muted)" : v === "✓" ? "var(--success-text)" : "var(--text-primary)", fontWeight: v === "✓" ? 600 : 400 }}>{v}</td>
+                            ))}
+                          </tr>
                         ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                      </tbody>
+                    </table>
+                  );
+                })()}
               </div>
             </div>
           </div>
