@@ -2375,32 +2375,53 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                 <span>E-mail</span><span>Papel</span><span>Área</span><span></span>
               </div>
 
-              {/* Lista */}
-              {members.length === 0 ? (
-                <p style={{ color: "var(--text-muted)", fontSize: "0.84rem", padding: "16px 0" }}>
-                  Nenhum utilizador adicionado ainda.
-                </p>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  {members.map(m => (
-                    <div key={m.email} style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px 80px",
-                      gap: 8, alignItems: "center", padding: "10px 12px", borderRadius: 8,
-                      backgroundColor: "var(--bg-surface-2)", border: "1px solid var(--border)" }}>
-                      <p style={{ fontSize: "0.84rem", fontWeight: 600, color: "var(--text-primary)" }}>{m.email}</p>
-                      <span style={{ fontSize: "0.72rem", fontWeight: 700, padding: "2px 10px", borderRadius: 20, textAlign: "center" as const,
-                        color: m.role === "admin" ? "#6d28d9" : m.role === "operator" ? "var(--accent)" : "var(--text-muted)",
-                        backgroundColor: m.role === "admin" ? "#ede9fe" : m.role === "operator" ? "var(--accent-subtle)" : "var(--bg-surface-2)",
-                        border: "1px solid var(--border)" }}>
-                        {m.role}
-                      </span>
-                      <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
-                        {activeWorkspace ? (workspaces.find(w => w.id === activeWorkspace)?.name ?? "—") : "Principal"}
-                      </span>
-                      <button onClick={() => handleRemoveMember(m.email)} style={s.revokeBtn}>Remover</button>
-                    </div>
-                  ))}
-                </div>
-              )}
+              {/* Lista — owner sempre aparece no topo */}
+              {(() => {
+                // Owner row: always show the logged-in user if not already in members list
+                const ownerInList = members.some(m => m.email === userName);
+                const ownerRow = userName && !ownerInList
+                  ? [{ email: userName, role: "admin", isOwner: true }]
+                  : [];
+                const allRows = [
+                  ...ownerRow,
+                  ...members.map(m => ({ ...m, isOwner: false })),
+                ];
+                if (allRows.length === 0) {
+                  return <p style={{ color: "var(--text-muted)", fontSize: "0.84rem", padding: "16px 0" }}>Sem utilizadores.</p>;
+                }
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {allRows.map(m => (
+                      <div key={m.email} style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px 80px",
+                        gap: 8, alignItems: "center", padding: "10px 12px", borderRadius: 8,
+                        backgroundColor: "var(--bg-surface-2)", border: "1px solid var(--border)" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <p style={{ fontSize: "0.84rem", fontWeight: 600, color: "var(--text-primary)" }}>{m.email}</p>
+                          {m.isOwner && (
+                            <span style={{ fontSize: "0.62rem", fontWeight: 700, padding: "1px 8px", borderRadius: 20,
+                              background: "#ede9fe", color: "#6d28d9", border: "1px solid #c4b5fd" }}>
+                              proprietário
+                            </span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: "0.72rem", fontWeight: 700, padding: "2px 10px", borderRadius: 20, textAlign: "center" as const,
+                          color: m.role === "admin" ? "#6d28d9" : m.role === "operator" ? "var(--accent)" : "var(--text-muted)",
+                          backgroundColor: m.role === "admin" ? "#ede9fe" : m.role === "operator" ? "var(--accent-subtle)" : "var(--bg-surface-2)",
+                          border: "1px solid var(--border)" }}>
+                          {m.role}
+                        </span>
+                        <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                          {activeWorkspace ? (workspaces.find(w => w.id === activeWorkspace)?.name ?? "—") : "Principal"}
+                        </span>
+                        {!m.isOwner
+                          ? <button onClick={() => handleRemoveMember(m.email)} style={s.revokeBtn}>Remover</button>
+                          : <span />
+                        }
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* ── Modal Adicionar Utilizador ── */}
