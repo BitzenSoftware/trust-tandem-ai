@@ -2988,6 +2988,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                       {wsSaving ? "A criar..." : "Criar Workspace"}
                     </button>
                   </div>
+                  {/* inline error shown if creation fails */}
+                  <p id="ws-error" style={{ fontSize: "0.78rem", color: "var(--danger, #dc2626)", marginTop: 8, display: "none" }}></p>
                 </div>
 
                 {/* Lista de workspaces */}

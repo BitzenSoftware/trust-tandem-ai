@@ -1494,7 +1494,9 @@ def listar_workspaces(tenant_id: str = Depends(_get_tenant_id)):
 def criar_workspace(body: WorkspaceIn, tenant_id: str = Depends(_get_tenant_id)):
     plan = repository.get_tenant_plan(tenant_id)
     limit = repository.get_workspaces_limit(plan)
-    current_count = len(repository.get_workspaces(tenant_id))
+    all_workspaces = repository.get_workspaces(tenant_id)
+    # Principal workspace doesn't count against the limit
+    current_count = len([w for w in all_workspaces if w.get("name") != "Principal"])
     if current_count >= limit:
         raise HTTPException(
             status_code=403,
