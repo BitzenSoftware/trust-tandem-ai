@@ -159,6 +159,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [tierCheckoutLoading, setTierCheckoutLoading] = useState<Record<number, boolean>>({});
   const [adminTiers,        setAdminTiers]        = useState<{ id: number; name: string; description: string; records_per_month: number; api_keys_limit: number; field_limit: number; price_monthly: number; stripe_price_id: string | null; active: boolean }[]>([]);
   const [editTierPrice,     setEditTierPrice]     = useState<Record<number, string>>({});
+  const [editTierFields,    setEditTierFields]    = useState<Record<number, { records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number }>>({});
   const [tierPriceSaving,   setTierPriceSaving]   = useState<Record<number, boolean>>({});
   const [tierPriceSaved,    setTierPriceSaved]    = useState<Record<number, boolean>>({});
   const [revealedTierPriceIds, setRevealedTierPriceIds] = useState<Record<number, boolean>>({});
@@ -383,8 +384,13 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       const tiers = await tiersRes.json();
       setAdminTiers(tiers);
       const priceMap: Record<number, string> = {};
-      tiers.forEach((t: { id: number; stripe_price_id: string | null }) => { priceMap[t.id] = t.stripe_price_id ?? ""; });
+      const fieldsMap: Record<number, { records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number }> = {};
+      tiers.forEach((t: { id: number; stripe_price_id: string | null; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number }) => {
+        priceMap[t.id] = t.stripe_price_id ?? "";
+        fieldsMap[t.id] = { records_per_month: t.records_per_month, api_keys_limit: t.api_keys_limit, diagnoses_per_month: t.diagnoses_per_month, field_limit: t.field_limit };
+      });
       setEditTierPrice(priceMap);
+      setEditTierFields(fieldsMap);
     }
     setAdminLoaded(true);
     // Auto-sync Stripe prices in background — silently updates plan configs if key is configured
@@ -786,9 +792,16 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     setTierPriceSaving(p => ({ ...p, [tierId]: true }));
     const h = await getFreshHeaders();
     if (!h) { setTierPriceSaving(p => ({ ...p, [tierId]: false })); return; }
+    const fields = editTierFields[tierId] ?? {};
     const res = await apiFetch(`${API}/admin/enterprise-tiers/${tierId}`, {
       method: "PATCH", headers: h,
-      body: JSON.stringify({ stripe_price_id: editTierPrice[tierId] || null }),
+      body: JSON.stringify({
+        stripe_price_id:    editTierPrice[tierId] || null,
+        records_per_month:  fields.records_per_month,
+        api_keys_limit:     fields.api_keys_limit,
+        diagnoses_per_month: fields.diagnoses_per_month,
+        field_limit:        fields.field_limit,
+      }),
     });
     if (res.ok) {
       const updated = await res.json();
@@ -2277,10 +2290,32 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                       )}
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {adminTiers.map(tier => (
-                          <div key={tier.id} style={{ backgroundColor: "var(--bg-surface-2)", borderRadius: 10, border: "1px solid var(--border)", padding: "12px 16px" }}>
+                          <div key={tier.id} style={{ backgroundColor: "var(--bg-surface-2)", borderRadius: 10, border: "1px solid var(--border)", padding: "14px 16px" }}>
+                            <p style={{ fontSize: "0.85rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 10 }}>
+                              {tier.name} — R${tier.price_monthly.toLocaleString("pt-BR")}/mês
+                            </p>
+                            {/* Numeric limits */}
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+                              {[
+                                { label: "Registros/mês (0=∞)", key: "records_per_month" as const },
+                                { label: "API Keys máx.",        key: "api_keys_limit"     as const },
+                                { label: "Diagnósticos/mês (0=∞)", key: "diagnoses_per_month" as const },
+                                { label: "Campos custom",        key: "field_limit"        as const },
+                              ].map(({ label, key }) => (
+                                <div key={key}>
+                                  <label style={s.ingestLabel}>{label}</label>
+                                  <input type="number" min={0} style={s.ingestInput}
+                                    value={editTierFields[tier.id]?.[key] ?? 0}
+                                    onChange={e => setEditTierFields(p => ({
+                                      ...p, [tier.id]: { ...(p[tier.id] ?? {}), [key]: Number(e.target.value) }
+                                    } as typeof p))} />
+                                </div>
+                              ))}
+                            </div>
+                            {/* Stripe Price ID + Guardar */}
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>
                               <div>
-                                <label style={s.ingestLabel}>{tier.name} — R${tier.price_monthly.toLocaleString("pt-BR")}/mês</label>
+                                <label style={s.ingestLabel}>Stripe Price ID</label>
                                 {editTierPrice[tier.id] ? (
                                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                                     <span style={{ ...s.ingestInput, display: "flex", alignItems: "center",
@@ -2317,16 +2352,13 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                                     onChange={e => setEditTierPrice(p => ({ ...p, [tier.id]: e.target.value }))} />
                                 )}
                               </div>
-                              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", paddingBottom: 10 }}>
-                                {tier.records_per_month > 0 ? `${tier.records_per_month.toLocaleString("pt-BR")} registros` : "Ilimitado"} · {tier.api_keys_limit >= 999 ? "∞" : tier.api_keys_limit} API Keys
-                              </div>
                               <button onClick={() => handleSaveTierPrice(tier.id)}
                                 disabled={tierPriceSaving[tier.id]}
                                 style={{ ...s.ingestBtn, opacity: tierPriceSaving[tier.id] ? 0.6 : 1, whiteSpace: "nowrap" as const }}>
                                 {tierPriceSaved[tier.id] ? "Guardado ✓" : tierPriceSaving[tier.id] ? "Guardando..." : "Guardar"}
                               </button>
-                            </div>
-                          </div>
+                            </div>{/* end price ID grid */}
+                          </div>{/* end tier card */}
                         ))}
                       </div>
                     </div>
