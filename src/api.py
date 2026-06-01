@@ -763,7 +763,7 @@ def bulk_resolver(
               dependencies=[Depends(_require_admin)])
 def criar_api_key(body: ApiKeyCreate, tenant_id: str = Depends(_get_tenant_id)):
     plan = repository.get_tenant_plan(tenant_id)
-    limits = repository.get_plan_limits(plan)
+    limits = repository.get_plan_limits(plan, tenant_id)
     max_keys = limits.get("api_keys_limit", 1)
     if max_keys < 999:
         current_count = len(repository.list_api_keys(tenant_id))
@@ -994,7 +994,7 @@ def deletar_secret(key_name: str):
 @_router.get("/plan", summary="Retorna o plano e limite de campos do tenant")
 def obter_plano(tenant_id: str = Depends(_get_tenant_id)):
     plan = repository.get_tenant_plan(tenant_id)
-    limit = repository.get_plan_field_limit(plan)
+    limit = repository.get_plan_field_limit(plan, tenant_id)
     count = repository.count_field_schemas(tenant_id)
     return {"plan": plan, "field_limit": limit, "field_count": count}
 
@@ -1010,7 +1010,7 @@ def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
     existing_keys = {f["field_key"] for f in current_schema}
     if body.field_key not in existing_keys:
         plan = repository.get_tenant_plan(tenant_id)
-        limit = repository.get_plan_field_limit(plan)
+        limit = repository.get_plan_field_limit(plan, tenant_id)
         count = repository.count_field_schemas(tenant_id)
         if count >= limit:
             raise HTTPException(
@@ -1279,6 +1279,18 @@ async def stripe_webhook(request: Request):
                 stripe_customer_id=session_obj.get("customer"),
                 stripe_subscription_id=session_obj.get("subscription"),
             )
+            # Link enterprise tier so field/key limits are enforceable per tier
+            enterprise_tier_id = meta.get("enterprise_tier_id")
+            if plan_name == "enterprise" and enterprise_tier_id:
+                try:
+                    tier = repository.get_enterprise_tier_by_id(int(enterprise_tier_id))
+                    if tier and tier.get("stripe_price_id"):
+                        repository.upsert_enterprise_config(
+                            t_id, tier["stripe_price_id"],
+                            float(tier.get("price_monthly", 0)), "BRL",
+                        )
+                except Exception:
+                    pass
 
     elif event_type in ("customer.subscription.updated", "customer.subscription.created"):
         sub_obj = event["data"]["object"]
