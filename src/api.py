@@ -194,7 +194,8 @@ _rate_limiter = _TenantRateLimiter()
 
 
 def _rate_limit(tenant_id: str = Depends(_get_tenant_id)) -> None:
-    _rate_limiter.check(tenant_id)
+    if tenant_id != "__admin__":  # Super admin bypasses rate limits
+        _rate_limiter.check(tenant_id)
 
 
 # Role resolution with 60s in-memory cache
@@ -793,16 +794,18 @@ def bulk_resolver(
               summary="Gera nova API Key para este tenant",
               dependencies=[Depends(_require_admin)])
 def criar_api_key(body: ApiKeyCreate, tenant_id: str = Depends(_get_tenant_id)):
-    plan = repository.get_tenant_plan(tenant_id)
-    limits = repository.get_plan_limits(plan, tenant_id)
-    max_keys = limits.get("api_keys_limit", 1)
-    if max_keys < 999:
-        current_count = len(repository.list_api_keys(tenant_id))
-        if current_count >= max_keys:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Limite de {max_keys} API Key(s) atingido para o plano {plan.capitalize()}. Faça upgrade para adicionar mais.",
-            )
+    # Super admin has unlimited API keys
+    if tenant_id != "__admin__":
+        plan = repository.get_tenant_plan(tenant_id)
+        limits = repository.get_plan_limits(plan, tenant_id)
+        max_keys = limits.get("api_keys_limit", 1)
+        if max_keys < 999:
+            current_count = len(repository.list_api_keys(tenant_id))
+            if current_count >= max_keys:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Limite de {max_keys} API Key(s) atingido para o plano {plan.capitalize()}. Faça upgrade para adicionar mais.",
+                )
     plain, key_id, created_at = repository.create_api_key(tenant_id, body.label)
     return ApiKeyOut(id=key_id, label=body.label, created_at=str(created_at), key=plain)
 
@@ -1038,9 +1041,10 @@ def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
     if body.field_key == "name":
         raise HTTPException(status_code=400, detail="O campo 'name' é reservado e não pode ser configurado.")
     # Only new fields count against the plan limit — updates are always allowed
+    # Super admin has unlimited fields
     current_schema = repository.get_tenant_schema(tenant_id)
     existing_keys = {f["field_key"] for f in current_schema}
-    if body.field_key not in existing_keys:
+    if body.field_key not in existing_keys and tenant_id != "__admin__":
         plan = repository.get_tenant_plan(tenant_id)
         limit = repository.get_plan_field_limit(plan, tenant_id)
         count = repository.count_field_schemas(tenant_id)
@@ -1496,16 +1500,17 @@ def listar_workspaces(tenant_id: str = Depends(_get_tenant_id)):
 @_router.post("/workspaces", status_code=status.HTTP_201_CREATED,
               summary="Cria um novo workspace")
 def criar_workspace(body: WorkspaceIn, tenant_id: str = Depends(_get_tenant_id)):
-    plan = repository.get_tenant_plan(tenant_id)
-    limit = repository.get_workspaces_limit(plan, tenant_id)
-    all_workspaces = repository.get_workspaces(tenant_id)
-    # Principal workspace doesn't count against the limit
-    current_count = len([w for w in all_workspaces if w.get("name") != "Principal"])
-    if current_count >= limit:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Limite de espaços de trabalho atingido ({current_count}/{limit}). Faça upgrade para adicionar mais.",
-        )
+    # Super admin has unlimited workspaces
+    if tenant_id != "__admin__":
+        plan = repository.get_tenant_plan(tenant_id)
+        limit = repository.get_workspaces_limit(plan, tenant_id)
+        all_workspaces = repository.get_workspaces(tenant_id)
+        current_count = len([w for w in all_workspaces if w.get("name") != "Principal"])
+        if current_count >= limit:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Limite de espaços de trabalho atingido ({current_count}/{limit}). Faça upgrade para adicionar mais.",
+            )
     return repository.create_workspace(tenant_id, body.name, body.description)
 
 
