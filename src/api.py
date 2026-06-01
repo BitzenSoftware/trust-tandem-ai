@@ -415,6 +415,12 @@ class SecretIn(BaseModel):
 
 class CheckoutIn(BaseModel):
     plan_name: str
+    enterprise_tier_id: Optional[int] = None
+
+
+class EnterpriseTierPriceIn(BaseModel):
+    stripe_price_id: Optional[str] = None
+    price_monthly: Optional[float] = None
 
 
 class EnterpriseClientIn(BaseModel):
@@ -1039,14 +1045,22 @@ def criar_checkout(body: CheckoutIn, tenant_id: str = Depends(_get_tenant_id)):
         raise HTTPException(status_code=503, detail="Stripe não configurado no servidor.")
     _stripe.api_key = stripe_key
 
-    # Enterprise: cada tenant precisa de config customizada; 403 se não configurado
-    if body.plan_name == "enterprise":
+    tier_meta: dict | None = None
+
+    if body.plan_name == "enterprise" and body.enterprise_tier_id:
+        # Self-service enterprise tier
+        tier = repository.get_enterprise_tier_by_id(body.enterprise_tier_id)
+        if not tier or not tier.get("active"):
+            raise HTTPException(status_code=404, detail="Tier Enterprise não encontrado.")
+        if not tier.get("stripe_price_id"):
+            raise HTTPException(status_code=400, detail=f"Price ID para '{tier['name']}' ainda não configurado. Contacte o suporte.")
+        price_id = tier["stripe_price_id"]
+        tier_meta = {"enterprise_tier_id": str(tier["id"]), "enterprise_tier_name": tier["name"]}
+    elif body.plan_name == "enterprise":
+        # Legacy manual config
         custom = repository.get_enterprise_config(tenant_id)
         if not custom:
-            raise HTTPException(
-                status_code=403,
-                detail="Plano Enterprise requer alinhamento comercial. Entre em contacto com a equipa de vendas.",
-            )
+            raise HTTPException(status_code=403, detail="Seleccione um tier Enterprise.")
         price_id = custom["stripe_price_id"]
     else:
         configs = repository.get_plan_configs()
@@ -1060,10 +1074,13 @@ def criar_checkout(body: CheckoutIn, tenant_id: str = Depends(_get_tenant_id)):
     frontend_url = os.environ.get("FRONTEND_URL", "https://trust-tandem-ai.vercel.app")
 
     try:
+        metadata: dict = {"tenant_id": tenant_id, "plan_name": body.plan_name}
+        if tier_meta:
+            metadata.update(tier_meta)
         kwargs: dict = {
             "mode": "subscription",
             "line_items": [{"price": price_id, "quantity": 1}],
-            "metadata": {"tenant_id": tenant_id, "plan_name": body.plan_name},
+            "metadata": metadata,
             "success_url": f"{frontend_url}/dashboard?sub=success",
             "cancel_url": f"{frontend_url}/dashboard?sub=canceled",
         }
@@ -1307,6 +1324,25 @@ def planos_publicos():
         }
         for c in configs_sorted
     ])
+
+
+@app.get("/api/v1/enterprise-tiers", summary="Lista tiers Enterprise disponíveis para self-service (sem auth)")
+def enterprise_tiers_publicos():
+    tiers = repository.get_enterprise_tiers(active_only=True)
+    return JSONResponse(tiers)
+
+
+@_router.get("/enterprise-tiers", summary="Lista tiers Enterprise (admin: inclui inactivos)",
+             dependencies=[Depends(_require_super_admin)])
+def listar_enterprise_tiers_admin():
+    return repository.get_enterprise_tiers(active_only=False)
+
+
+@_router.patch("/enterprise-tiers/{tier_id}", summary="Actualiza stripe_price_id e preço de um tier [super admin]",
+               dependencies=[Depends(_require_super_admin)])
+def actualizar_enterprise_tier(tier_id: int, body: EnterpriseTierPriceIn):
+    repository.upsert_enterprise_tier_price(tier_id, body.stripe_price_id, body.price_monthly)
+    return repository.get_enterprise_tiers(active_only=False)
 
 
 app.include_router(_router)
