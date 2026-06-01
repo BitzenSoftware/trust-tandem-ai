@@ -1177,6 +1177,49 @@ def get_plan_field_limit(plan_name: str) -> int:
     return PLAN_LIMITS.get(plan_name, 5)
 
 
+# --- enterprise_tiers ---
+
+def get_enterprise_tiers(active_only: bool = True) -> list[dict]:
+    if USE_SUPABASE:
+        params: dict = {
+            "select": "id,name,description,records_per_month,api_keys_limit,diagnoses_per_month,field_limit,price_monthly,stripe_price_id,active,sort_order",
+            "order": "sort_order.asc",
+        }
+        if active_only:
+            params["active"] = "eq.true"
+        resp = _http.get(f"{_SUPABASE_URL}/rest/v1/enterprise_tiers", params=params, headers=_HEADERS, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    return []
+
+
+def get_enterprise_tier_by_id(tier_id: int) -> dict | None:
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/enterprise_tiers",
+            params={"select": "id,name,records_per_month,api_keys_limit,field_limit,price_monthly,stripe_price_id,active",
+                    "id": f"eq.{tier_id}"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0] if rows else None
+    return None
+
+
+def upsert_enterprise_tier_price(tier_id: int, stripe_price_id: str | None, price_monthly: float | None = None) -> None:
+    if USE_SUPABASE:
+        payload: dict = {"stripe_price_id": stripe_price_id}
+        if price_monthly is not None:
+            payload["price_monthly"] = price_monthly
+        _http.patch(
+            f"{_SUPABASE_URL}/rest/v1/enterprise_tiers",
+            json=payload,
+            params={"id": f"eq.{tier_id}"},
+            headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10,
+        ).raise_for_status()
+
+
 # --- admin_secrets ---
 
 def upsert_secret(key_name: str, encrypted_value: str) -> None:
