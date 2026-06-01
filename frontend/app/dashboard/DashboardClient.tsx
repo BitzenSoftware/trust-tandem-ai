@@ -216,14 +216,16 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     try { await fetch(`${process.env.NEXT_PUBLIC_API_URL}/health`, { signal: wc.signal }); }
     catch { /* server still sleeping — will fail below with a clear error */ }
     finally { clearTimeout(wt); }
+    // Phase 2: workspace filter param
+    const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
     // Now fetch data (server should be warm)
     try {
       const [dbRes, qRes, profileRes, countRes, pendingRes] = await Promise.all([
-        apiFetch(`${API}/database`,           { headers: h }),
-        apiFetch(`${API}/review-queue`,       { headers: h }),
-        apiFetch(`${API}/admin/profile`,      { headers: h }),
-        apiFetch(`${API}/database/count`,     { headers: h }),
-        apiFetch(`${API}/pending-approval`,   { headers: h }),
+        apiFetch(`${API}/database${wsParam}`,          { headers: h }),
+        apiFetch(`${API}/review-queue${wsParam}`,      { headers: h }),
+        apiFetch(`${API}/admin/profile`,               { headers: h }),
+        apiFetch(`${API}/database/count${wsParam}`,    { headers: h }),
+        apiFetch(`${API}/pending-approval${wsParam}`,  { headers: h }),
       ]);
       if (profileRes.ok) {
         const prof = await profileRes.json();
@@ -257,7 +259,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       else
         setError(t.dashboard.errConn);
     } finally { setLoading(false); }
-  }, [router, t]);
+  }, [router, t, activeWorkspace]);
 
   useEffect(() => {
     fetchData();
@@ -755,7 +757,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     const h = await getFreshHeaders();
     if (!h) { router.push("/login"); return; }
     try {
-      await apiFetch(`${API}/review-queue/${encodeURIComponent(name)}`, { method: "DELETE", headers: h });
+      const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+      await apiFetch(`${API}/review-queue/${encodeURIComponent(name)}${wsParam}`, { method: "DELETE", headers: h });
       fetchData();
     } catch { setError(t.dashboard.expurgeError); }
   }
@@ -797,7 +800,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     const h = await getFreshHeaders();
     if (!h) { router.push("/login"); return; }
     try {
-      await apiFetch(`${API}/resolve`, {
+      const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+      await apiFetch(`${API}/resolve${wsParam}`, {
         method: "POST", headers: h,
         body: JSON.stringify({ name, email: corr.email || null, cpf: corr.cpf || null }),
       });
@@ -899,7 +903,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     const h = await getFreshHeaders();
     if (!h) { router.push("/login"); return; }
     try {
-      await apiFetch(`${API}/admin-approve/${encodeURIComponent(name)}`, { method: "POST", headers: h });
+      const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+      await apiFetch(`${API}/admin-approve/${encodeURIComponent(name)}${wsParam}`, { method: "POST", headers: h });
       setPendingApproval(prev => prev.filter(r => r.name !== name));
       fetchData();
     } catch { /* user can retry */ }
@@ -1006,7 +1011,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
 
     // Phase 2 — single POST /bulk-resolve (one HTTP round-trip, all DB ops server-side)
     try {
-      const resolveRes = await apiFetch(`${API}/bulk-resolve`, {
+      const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+      const resolveRes = await apiFetch(`${API}/bulk-resolve${wsParam}`, {
         method: "POST", headers: h,
         body: JSON.stringify({ items, mode }),
       });
@@ -1133,7 +1139,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
           processed: i * CHUNK_SIZE,
           totalRecords: payload.length,
         });
-        const res = await fetch(`${API}/ingest`, {
+        const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+        const res = await fetch(`${API}/ingest${wsParam}`, {
           method: "POST", headers: h, body: JSON.stringify(chunks[i]),
         });
         if (res.ok) {
