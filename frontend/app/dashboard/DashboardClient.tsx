@@ -439,6 +439,11 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     finally { setWorkspacesLoaded(true); }
   }, [activeWorkspace]);
 
+  // Phase 2: Load workspaces on mount so header selector is always visible
+  useEffect(() => {
+    fetchWorkspaces();
+  }, [fetchWorkspaces]);
+
   const fetchWorkspaceMembers = useCallback(async (wsId: number) => {
     const h = await getFreshHeaders();
     if (!h) return;
