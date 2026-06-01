@@ -1,6 +1,4 @@
 import base64
-import csv
-import io
 import json
 from cryptography.fernet import Fernet, InvalidToken
 import os
@@ -8,7 +6,6 @@ import re
 import sys
 import time
 from collections import defaultdict, deque
-from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
@@ -18,11 +15,10 @@ import anthropic
 import requests as _req
 from typing import Optional
 
-from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, Request, Security, UploadFile, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
-from fpdf import FPDF
 from pydantic import BaseModel, Field
 
 import repository
@@ -407,6 +403,9 @@ class PlanConfigIn(BaseModel):
     field_limit: int
     price_monthly: float = 0.0
     stripe_price_id: Optional[str] = None
+    records_per_month: int = 0
+    api_keys_limit: int = 1
+    diagnoses_per_month: int = 0
 
 
 class SecretIn(BaseModel):
@@ -753,6 +752,16 @@ def bulk_resolver(
               summary="Gera nova API Key para este tenant",
               dependencies=[Depends(_require_admin)])
 def criar_api_key(body: ApiKeyCreate, tenant_id: str = Depends(_get_tenant_id)):
+    plan = repository.get_tenant_plan(tenant_id)
+    limits = repository.get_plan_limits(plan)
+    max_keys = limits.get("api_keys_limit", 1)
+    if max_keys < 999:
+        current_count = len(repository.list_api_keys(tenant_id))
+        if current_count >= max_keys:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Limite de {max_keys} API Key(s) atingido para o plano {plan.capitalize()}. Faça upgrade para adicionar mais.",
+            )
     plain, key_id, created_at = repository.create_api_key(tenant_id, body.label)
     return ApiKeyOut(id=key_id, label=body.label, created_at=str(created_at), key=plain)
 
@@ -931,7 +940,10 @@ def listar_planos_admin():
 @_router.put("/admin/plans/{plan_name}", summary="Actualiza configuração de um plano [super admin]",
              dependencies=[Depends(_require_super_admin)])
 def atualizar_plano(plan_name: str, body: PlanConfigIn):
-    repository.upsert_plan_config(plan_name, body.field_limit, body.price_monthly, body.stripe_price_id)
+    repository.upsert_plan_config(
+        plan_name, body.field_limit, body.price_monthly, body.stripe_price_id,
+        body.records_per_month, body.api_keys_limit, body.diagnoses_per_month,
+    )
     return repository.get_plan_configs()
 
 
@@ -1281,182 +1293,20 @@ async def stripe_webhook(request: Request):
     return JSONResponse({"received": True})
 
 
-@app.get("/api/v1/plans/public", summary="Retorna planos disponíveis para a landing page (sem auth)")
+@app.get("/api/v1/plans/public", summary="Retorna planos com todos os limites para a landing page (sem auth)")
 def planos_publicos():
     configs = repository.get_plan_configs()
     configs_sorted = sorted(configs, key=lambda c: c.get("price_monthly") or 0)
     return JSONResponse([
-        {"plan_name": c["plan_name"], "price_monthly": c.get("price_monthly") or 0}
+        {
+            "plan_name":           c["plan_name"],
+            "price_monthly":       c.get("price_monthly") or 0,
+            "records_per_month":   c.get("records_per_month") or 0,
+            "api_keys_limit":      c.get("api_keys_limit") or 1,
+            "diagnoses_per_month": c.get("diagnoses_per_month") or 0,
+        }
         for c in configs_sorted
     ])
-
-class CsvIngestResponse(BaseModel):
-    processados: int
-    banco_limpo: int
-    fila_revisao: int
-    erros: list[str]
-
-
-@_router.post("/ingest/csv", response_model=CsvIngestResponse, status_code=status.HTTP_202_ACCEPTED,
-              summary="Ingestão em batch via CSV (até 100k registos)")
-async def ingerir_csv(
-    file: UploadFile = File(..., description="CSV com colunas: name, email, cpf"),
-    painel: PainelOrquestracao = Depends(_get_painel),
-):
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Apenas ficheiros .csv são aceites.")
-    content = await file.read()
-    try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = content.decode("latin-1")
-
-    reader = csv.DictReader(io.StringIO(text))
-    if not reader.fieldnames:
-        raise HTTPException(status_code=400, detail="CSV vazio ou sem cabeçalho.")
-
-    fieldnames_lower = {f.strip().lower(): f for f in reader.fieldnames}
-    erros: list[str] = []
-    processados = 0
-
-    for i, row in enumerate(reader, start=2):
-        if processados >= 100_000:
-            erros.append(f"Limite de 100.000 registos atingido — linha {i} em diante ignorada.")
-            break
-        name_key = fieldnames_lower.get("name") or fieldnames_lower.get("nome")
-        email_key = fieldnames_lower.get("email")
-        cpf_key = fieldnames_lower.get("cpf")
-        if not name_key:
-            erros.append(f"Linha {i}: coluna 'name' ou 'nome' não encontrada.")
-            continue
-        name = (row.get(name_key) or "").strip()
-        if not name:
-            erros.append(f"Linha {i}: nome vazio — ignorado.")
-            continue
-        record = {
-            "name": name,
-            "email": (row.get(email_key, "") or "").strip() if email_key else "",
-            "cpf": (row.get(cpf_key, "") or "").strip() if cpf_key else "",
-        }
-        painel.processar_registro(record)
-        processados += 1
-
-    return CsvIngestResponse(
-        processados=processados,
-        banco_limpo=len(painel.banco_limpo),
-        fila_revisao=len(painel.fila_revisao),
-        erros=erros[:20],
-    )
-
-
-@_router.get("/ripd", summary="Gera Relatório de Impacto à Proteção de Dados em PDF")
-def gerar_ripd(painel: PainelOrquestracao = Depends(_get_painel)):
-    banco = painel.banco_limpo
-    fila = painel.fila_revisao
-    total = len(banco) + len(fila)
-    conformidade = f"{(len(banco) / total * 100):.1f}%" if total > 0 else "N/A"
-    now = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_margins(20, 20, 20)
-
-    # Header
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 10, "Relatorio de Impacto a Protecao de Dados", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 6, "RIPD - Trust & Tandem AI / Bitzen Software", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(120, 120, 120)
-    pdf.cell(0, 6, f"Gerado em: {now}", ln=True, align="C")
-    pdf.set_text_color(0, 0, 0)
-    pdf.ln(8)
-
-    # Section helper
-    def section(title: str):
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.set_fill_color(240, 245, 255)
-        pdf.cell(0, 8, title, ln=True, fill=True)
-        pdf.ln(2)
-        pdf.set_font("Helvetica", "", 10)
-
-    def row(label: str, value: str):
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(70, 7, label + ":", ln=False)
-        pdf.set_font("Helvetica", "", 10)
-        pdf.cell(0, 7, value, ln=True)
-
-    section("1. Identificacao do Controlador")
-    row("Organizacao", "Bitzen Software")
-    row("Plataforma", "Trust & Tandem AI")
-    row("DPO", "dpo@bitzen.app")
-    row("Data do relatorio", now)
-    pdf.ln(4)
-
-    section("2. Descricao do Tratamento")
-    row("Finalidade", "Validacao de conformidade LGPD de registos de clientes")
-    row("Base legal", "Art. 7 V LGPD - Execucao de contrato")
-    row("Tipos de dados", "Nome, CPF, e-mail de titulares terceiros")
-    row("Operador", "Bitzen Software (SaaS multi-tenant)")
-    pdf.ln(4)
-
-    section("3. Metricas da Sessao")
-    row("Total de registos processados", str(total))
-    row("Registos aprovados (banco limpo)", str(len(banco)))
-    row("Registos em fila de revisao", str(len(fila)))
-    row("Taxa de conformidade", conformidade)
-    pdf.ln(4)
-
-    section("4. Medidas Tecnicas e Organizacionais")
-    measures = [
-        "Mascaramento na borda: dados brutos nunca transmitidos ao modelo de IA",
-        "Isolamento multi-tenant via Row-Level Security (PostgreSQL/Supabase)",
-        "Autenticacao JWT assinada com audience validation",
-        "Criptografia em transito TLS 1.3 e em repouso AES-256",
-        "Trilha de auditoria imutavel para operacoes de expurgo",
-        "Human-in-the-Loop: toda decisao final e humana (Art. 20 LGPD)",
-    ]
-    for m in measures:
-        pdf.cell(5, 6, "-", ln=False)
-        pdf.multi_cell(0, 6, m)
-    pdf.ln(4)
-
-    section("5. Direitos dos Titulares (Art. 18 LGPD)")
-    rights = [
-        "Expurgo imediato disponivel via painel (botao 'Expurgar Art. 18 LGPD')",
-        "Trilha de auditoria registra todas as operacoes de eliminacao",
-        "Prazo de resposta: 15 dias uteis para solicitacoes via privacidade@bitzen.app",
-    ]
-    for r_ in rights:
-        pdf.cell(5, 6, "-", ln=False)
-        pdf.multi_cell(0, 6, r_)
-    pdf.ln(4)
-
-    section("6. Riscos Identificados e Mitigacoes")
-    pdf.multi_cell(0, 6,
-        "Risco: Exposicao de dados sensiveis ao modelo de IA.\n"
-        "Mitigacao: Mascaramento obrigatorio - apenas hints parciais (3 chars) sao enviados.\n\n"
-        "Risco: Acesso nao autorizado entre tenants.\n"
-        "Mitigacao: RLS no banco de dados + JWT com tenant_id obrigatorio em todos os endpoints.\n\n"
-        "Risco: Retencao indevida apos solicitacao de exclusao.\n"
-        "Mitigacao: Expurgo imediato com confirmacao + log de auditoria."
-    )
-    pdf.ln(4)
-
-    section("7. Declaracao de Conformidade")
-    pdf.multi_cell(0, 6,
-        "Este relatorio foi gerado automaticamente pela plataforma Trust & Tandem AI. "
-        "As metricas refletem o estado atual do tratamento de dados do tenant. "
-        "O DPO deve revisar e assinar este documento para fins de prestacao de contas "
-        "perante a ANPD (Art. 38 LGPD)."
-    )
-
-    pdf_bytes = pdf.output()
-    return StreamingResponse(
-        io.BytesIO(bytes(pdf_bytes)),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=RIPD_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"},
-    )
 
 
 app.include_router(_router)
