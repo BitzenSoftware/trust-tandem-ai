@@ -76,7 +76,7 @@ function MoonIcon() {
 export default function DashboardClient({ token: _token, userName }: { token: string; userName: string }) {
   const router = useRouter();
   const { t } = useTranslation();
-  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "schema" | "audit" | "admin" | "subscription">("dashboard");
+  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "schema" | "audit" | "admin" | "subscription" | "users">("dashboard");
   const [db,        setDb]        = useState<CleanRecord[]>([]);
   const [queue,     setQueue]     = useState<QueueItem[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -85,6 +85,13 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [corrections,   setCorrections]   = useState<Record<string, { email: string; cpf: string }>>({});
   const [approveLoading, setApproveLoading] = useState<Record<string, boolean>>({});
   const [theme,     setTheme]     = useState<"light"|"dark">("light");
+  const [workspaces, setWorkspaces] = useState<{ id: number; name: string; description: string; created_at: string }[]>([]);
+  const [activeWorkspace, setActiveWorkspace] = useState<number | null>(null);
+  const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
+  const [workspaceMembers, setWorkspaceMembers] = useState<{ id: number; workspace_id: number; email: string; role: string; invited_by: string | null; accepted: boolean; created_at: string }[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("operator");
+  const [inviteLoading, setInviteLoading] = useState(false);
   const [ingestMode,    setIngestMode]    = useState<"csv" | "manual">("csv");
   const [csvData,       setCsvData]       = useState<Record<string, string>[]>([]);
   const [csvColumns,    setCsvColumns]    = useState<string[]>([]);
@@ -242,7 +249,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     } finally { setLoading(false); }
   }, [router, t]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -409,6 +418,61 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       })
       .catch(() => {});
   }, []);
+
+  const fetchWorkspaces = useCallback(async () => {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    try {
+      const res = await apiFetch(`${API}/workspaces`, { headers: h });
+      if (res.ok) {
+        const ws = await res.json();
+        setWorkspaces(ws);
+        if (ws.length > 0 && !activeWorkspace) setActiveWorkspace(ws[0].id);
+      }
+    } catch { /* ignore */ }
+    finally { setWorkspacesLoaded(true); }
+  }, [activeWorkspace]);
+
+  const fetchWorkspaceMembers = useCallback(async (wsId: number) => {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    try {
+      const res = await apiFetch(`${API}/workspaces/${wsId}/members`, { headers: h });
+      if (res.ok) setWorkspaceMembers(await res.json());
+    } catch { /* ignore */ }
+  }, []);
+
+  async function handleInviteWorkspaceMember(wsId: number) {
+    if (!inviteEmail || !inviteRole) return;
+    setInviteLoading(true);
+    const h = await getFreshHeaders();
+    if (!h) { setInviteLoading(false); return; }
+    try {
+      const res = await apiFetch(`${API}/workspaces/${wsId}/members`, {
+        method: "POST", headers: h,
+        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
+      });
+      if (res.ok) {
+        setInviteEmail("");
+        setInviteRole("operator");
+        await fetchWorkspaceMembers(wsId);
+      } else alert("Erro ao convidar membro.");
+    } catch { alert("Erro de ligação."); }
+    finally { setInviteLoading(false); }
+  }
+
+  async function handleRemoveWorkspaceMember(wsId: number, email: string) {
+    if (!confirm(`Remover ${email}?`)) return;
+    const h = await getFreshHeaders();
+    if (!h) return;
+    try {
+      const res = await apiFetch(`${API}/workspaces/${wsId}/members/${email}`, {
+        method: "DELETE", headers: h,
+      });
+      if (res.ok) await fetchWorkspaceMembers(wsId);
+      else alert("Erro ao remover membro.");
+    } catch { alert("Erro de ligação."); }
+  }
 
   async function handleSavePlan(plan_name: string) {
     const cfg = editPlan[plan_name];
@@ -1206,9 +1270,17 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       {/* Header */}
       <header style={{ ...s.header, padding: "0 24px" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
-          <div>
-            <div style={s.logo}>Trust & Tandem AI</div>
-            <div style={s.logoSub}>{t.dashboard.subtitle}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div>
+              <div style={s.logo}>Trust & Tandem AI</div>
+              <div style={s.logoSub}>{t.dashboard.subtitle}</div>
+            </div>
+            {workspacesLoaded && workspaces.length > 0 && (
+              <select value={activeWorkspace ?? ""} onChange={e => { setActiveWorkspace(Number(e.target.value)); fetchWorkspaceMembers(Number(e.target.value)); }}
+                style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", fontSize: "0.84rem", fontWeight: 600, cursor: "pointer" }}>
+                {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+              </select>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <LangSelector />
@@ -1261,6 +1333,11 @@ export default function DashboardClient({ token: _token, userName }: { token: st
             {userRole === "admin" && (
               <button onClick={() => setTab("subscription")} style={tab === "subscription" ? s.tabActive : s.tabInactive}>
                 {t.subscription.tab}
+              </button>
+            )}
+            {userRole === "admin" && (
+              <button onClick={() => { setTab("users"); fetchWorkspaces(); }} style={tab === "users" ? s.tabActive : s.tabInactive}>
+                👥 Utilizadores
               </button>
             )}
             {isSuperAdmin && (
@@ -2154,6 +2231,74 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                 );
               })()}
             </div>
+          </div>
+
+        ) : tab === "users" ? (
+          /* ── UTILIZADORES ── */
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {workspacesLoaded && workspaces.length > 0 && activeWorkspace ? (
+              <>
+                <div style={s.card}>
+                  <h2 style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 16 }}>
+                    Membros de {workspaces.find(w => w.id === activeWorkspace)?.name}
+                  </h2>
+
+                  {/* Convite */}
+                  <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid var(--border)" }}>
+                    <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 12 }}>Convidar novo membro</p>
+                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                      <div style={{ flex: 1 }}>
+                        <label style={s.ingestLabel}>E-mail</label>
+                        <input type="email" style={s.ingestInput} placeholder="utilizador@empresa.com"
+                          value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} />
+                      </div>
+                      <div>
+                        <label style={s.ingestLabel} htmlFor="invite-role">Role</label>
+                        <select id="invite-role" style={{ ...s.ingestInput, padding: "10px 14px" }}
+                          value={inviteRole} onChange={e => setInviteRole(e.target.value)}>
+                          <option value="admin">Admin</option>
+                          <option value="operator">Operator</option>
+                          <option value="viewer">Viewer</option>
+                        </select>
+                      </div>
+                      <button onClick={() => handleInviteWorkspaceMember(activeWorkspace)}
+                        disabled={inviteLoading || !inviteEmail}
+                        style={{ ...s.ingestBtn, opacity: inviteLoading || !inviteEmail ? 0.6 : 1, whiteSpace: "nowrap" as const }}>
+                        {inviteLoading ? "A convidar..." : "Convidar"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Lista de membros */}
+                  {workspaceMembers.length === 0 ? (
+                    <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>Sem membros neste espaço de trabalho.</p>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {workspaceMembers.map(member => (
+                        <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                          backgroundColor: "var(--bg-surface-2)", padding: "12px 14px", borderRadius: 8, border: "1px solid var(--border)" }}>
+                          <div>
+                            <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text-primary)" }}>{member.email}</p>
+                            <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                              {member.role.toUpperCase()} {member.accepted ? "✓" : "(convite pendente)"}
+                            </p>
+                          </div>
+                          <button onClick={() => handleRemoveWorkspaceMember(activeWorkspace, member.email)}
+                            style={{ fontSize: "0.78rem", padding: "6px 12px", borderRadius: 6, border: "none",
+                              backgroundColor: "var(--danger-subtle)", color: "var(--danger-text)", cursor: "pointer" }}>
+                            Remover
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div style={s.card}>
+                <p style={{ color: "var(--text-muted)" }}>A carregar espaços de trabalho...</p>
+              </div>
+            )}
           </div>
 
         ) : tab === "admin" ? (
