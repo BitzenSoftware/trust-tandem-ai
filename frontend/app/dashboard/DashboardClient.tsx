@@ -331,14 +331,16 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     const h = await getFreshHeaders();
     if (!h) return;
     try {
+      // Phase 2: Include workspace_id in schema queries
+      const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
       const [schemaRes, planRes] = await Promise.all([
-        apiFetch(`${API}/schema`, { headers: h }),
+        apiFetch(`${API}/schema${wsParam}`, { headers: h }),
         apiFetch(`${API}/plan`,   { headers: h }),
       ]);
       if (schemaRes.ok) { setSchema(await schemaRes.json()); setSchemaLoaded(true); }
       if (planRes.ok)   setPlanInfo(await planRes.json());
     } catch { /* ignore */ }
-  }, []);
+  }, [activeWorkspace]);
 
   async function handleAddField() {
     if (!newField.field_key || !newField.label) return;
@@ -347,7 +349,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     const h = await getFreshHeaders();
     if (!h) { setSchemaLoading(false); return; }
     try {
-      const res = await apiFetch(`${API}/schema/fields`, {
+      // Phase 2: Include workspace_id in field creation
+      const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+      const res = await apiFetch(`${API}/schema/fields${wsParam}`, {
         method: "POST", headers: h,
         body: JSON.stringify(newField),
       });
@@ -369,7 +373,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     if (!confirm(t.schema.confirmDelete)) return;
     const h = await getFreshHeaders();
     if (!h) return;
-    await apiFetch(`${API}/schema/fields/${encodeURIComponent(field_key)}`, { method: "DELETE", headers: h });
+    // Phase 2: Include workspace_id in field deletion
+    const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+    await apiFetch(`${API}/schema/fields/${encodeURIComponent(field_key)}${wsParam}`, { method: "DELETE", headers: h });
     fetchSchema();
   }
 
@@ -1832,6 +1838,23 @@ export default function DashboardClient({ token: _token, userName }: { token: st
         ) : tab === "schema" ? (
           /* ── SCHEMA EDITOR ── */
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Phase 2: Workspace selector for schema */}
+            {workspacesLoaded && workspaces.length > 0 && (
+              <div style={{ ...s.card, display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
+                <label style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap" }}>Workspace:</label>
+                <select
+                  value={activeWorkspace ?? ""}
+                  onChange={e => {
+                    const wsId = Number(e.target.value);
+                    setActiveWorkspace(wsId);
+                    setSchema([]);
+                    setSchemaLoaded(false);
+                  }}
+                  style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", flex: 1 }}>
+                  {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+                </select>
+              </div>
+            )}
             <div style={s.settingsCard}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 4 }}>
                 <p style={{ ...s.settingsTitle, marginBottom: 0 }}>{t.schema.title}</p>
