@@ -1260,6 +1260,112 @@ def upsert_enterprise_tier_price(
         ).raise_for_status()
 
 
+# --- workspaces ---
+
+def get_workspaces(tenant_id: str) -> list[dict]:
+    """Returns all workspaces for a tenant."""
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/workspaces",
+            params={"tenant_id": f"eq.{tenant_id}", "order": "created_at.asc"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    return []
+
+
+def get_workspace_by_id(workspace_id: int) -> dict | None:
+    """Returns a workspace by ID."""
+    if USE_SUPABASE:
+        try:
+            resp = _http.get(
+                f"{_SUPABASE_URL}/rest/v1/workspaces",
+                params={"id": f"eq.{workspace_id}"},
+                headers=_HEADERS, timeout=10,
+            )
+            resp.raise_for_status()
+            rows = resp.json()
+            return rows[0] if rows else None
+        except Exception:
+            return None
+    return None
+
+
+def create_workspace(tenant_id: str, name: str, description: str = "") -> dict:
+    """Creates a new workspace. Returns the created workspace."""
+    if USE_SUPABASE:
+        resp = _http.post(
+            f"{_SUPABASE_URL}/rest/v1/workspaces",
+            json={"tenant_id": tenant_id, "name": name, "description": description, "is_default": False},
+            headers={**_HEADERS, "Prefer": "return=representation"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0] if rows else {}
+    return {}
+
+
+def get_workspace_members(workspace_id: int) -> list[dict]:
+    """Returns all members of a workspace."""
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/workspace_members",
+            params={"workspace_id": f"eq.{workspace_id}", "order": "created_at.asc"},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    return []
+
+
+def add_workspace_member(workspace_id: int, tenant_id: str, email: str, role: str, invited_by: str) -> dict:
+    """Adds a member to a workspace. Returns the created record."""
+    if USE_SUPABASE:
+        resp = _http.post(
+            f"{_SUPABASE_URL}/rest/v1/workspace_members",
+            json={"workspace_id": workspace_id, "tenant_id": tenant_id, "email": email, "role": role, "invited_by": invited_by},
+            headers={**_HEADERS, "Prefer": "return=representation"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0] if rows else {}
+    return {}
+
+
+def update_workspace_member_role(workspace_id: int, email: str, role: str) -> None:
+    """Updates a member's role in a workspace."""
+    if USE_SUPABASE:
+        _http.patch(
+            f"{_SUPABASE_URL}/rest/v1/workspace_members",
+            json={"role": role},
+            params={"workspace_id": f"eq.{workspace_id}", "email": f"eq.{email}"},
+            headers={**_HEADERS, "Prefer": "return=minimal"},
+            timeout=10,
+        ).raise_for_status()
+
+
+def remove_workspace_member(workspace_id: int, email: str) -> None:
+    """Removes a member from a workspace."""
+    if USE_SUPABASE:
+        _http.delete(
+            f"{_SUPABASE_URL}/rest/v1/workspace_members",
+            params={"workspace_id": f"eq.{workspace_id}", "email": f"eq.{email}"},
+            headers=_HEADERS, timeout=10,
+        ).raise_for_status()
+
+
+def get_workspaces_limit(plan_name: str) -> int:
+    """Returns the workspace limit for a plan."""
+    configs = get_plan_configs()
+    cfg = next((c for c in configs if c["plan_name"] == plan_name), None)
+    if cfg:
+        return cfg.get("workspaces_limit", 1)
+    return 1
+
+
 # --- admin_secrets ---
 
 def upsert_secret(key_name: str, encrypted_value: str) -> None:
