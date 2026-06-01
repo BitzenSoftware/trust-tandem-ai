@@ -419,8 +419,12 @@ class CheckoutIn(BaseModel):
 
 
 class EnterpriseTierPriceIn(BaseModel):
-    stripe_price_id: Optional[str] = None
-    price_monthly: Optional[float] = None
+    stripe_price_id:     Optional[str]   = None
+    price_monthly:       Optional[float] = None
+    records_per_month:   Optional[int]   = None
+    api_keys_limit:      Optional[int]   = None
+    diagnoses_per_month: Optional[int]   = None
+    field_limit:         Optional[int]   = None
 
 
 class EnterpriseClientIn(BaseModel):
@@ -1348,7 +1352,11 @@ def listar_enterprise_tiers_admin():
 @_router.patch("/admin/enterprise-tiers/{tier_id}", summary="Actualiza stripe_price_id e preço de um tier [super admin]",
                dependencies=[Depends(_require_super_admin)])
 def actualizar_enterprise_tier(tier_id: int, body: EnterpriseTierPriceIn):
-    repository.upsert_enterprise_tier_price(tier_id, body.stripe_price_id, body.price_monthly)
+    repository.upsert_enterprise_tier_price(
+        tier_id, body.stripe_price_id, body.price_monthly,
+        body.records_per_month, body.api_keys_limit,
+        body.diagnoses_per_month, body.field_limit,
+    )
     return repository.get_enterprise_tiers(active_only=False)
 
 
