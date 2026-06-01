@@ -155,8 +155,8 @@ function formatPrice(planName: string, price: number): { label: string; period: 
 
 const FAQ_ITEMS = [
   {
-    q: "Qual modelo de IA é utilizado? Meus dados são enviados para terceiros?",
-    a: "Utilizamos Claude (Anthropic). Antes de qualquer chamada à IA, os dados são mascarados na borda — o modelo recebe apenas a representação parcial do campo com problema, nunca o dado real do cliente. A Anthropic não usa dados de chamadas de API para treinar seus modelos.",
+    q: "Meus dados são enviados para terceiros?",
+    a: "Antes de qualquer chamada à IA, os dados são mascarados na borda — o modelo recebe apenas a representação parcial do campo com problema, nunca o dado real do cliente. Os provedores de IA que utilizamos contratualmente não usam dados de chamadas de API para treinar seus modelos.",
   },
   {
     q: "Por que o custo de IA na ingestão é R$ 0?",
