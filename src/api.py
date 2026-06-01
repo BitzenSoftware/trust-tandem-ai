@@ -270,8 +270,8 @@ app = FastAPI(
     title="Trust & Tandem AI Gateway",
     description="API segura de ingestão de dados em conformidade com LGPD — Orquestração Humano-IA",
     version="2.0.0",
-    docs_url=None if _API_KEY else "/docs",
-    redoc_url=None if _API_KEY else "/redoc",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 app.add_middleware(
