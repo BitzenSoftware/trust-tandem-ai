@@ -1292,9 +1292,17 @@ export default function DashboardClient({ token: _token, userName }: { token: st
               <div style={s.logo}>Trust & Tandem AI</div>
               <div style={s.logoSub}>{t.dashboard.subtitle}</div>
             </div>
-            {workspacesLoaded && workspaces.length > 0 && (
-              <select value={activeWorkspace ?? ""} onChange={e => { setActiveWorkspace(Number(e.target.value)); fetchWorkspaceMembers(Number(e.target.value)); }}
+            {workspacesLoaded && (
+              <select
+                value={activeWorkspace ?? ""}
+                onChange={e => {
+                  const val = e.target.value;
+                  const wsId = val === "" ? null : Number(val);
+                  setActiveWorkspace(wsId);
+                  if (wsId) fetchWorkspaceMembers(wsId);
+                }}
                 style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", fontSize: "0.84rem", fontWeight: 600, cursor: "pointer" }}>
+                <option value="">Principal</option>
                 {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
               </select>
             )}
