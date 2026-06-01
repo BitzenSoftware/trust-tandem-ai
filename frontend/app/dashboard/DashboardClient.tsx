@@ -157,9 +157,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [enterpriseTiers,   setEnterpriseTiers]   = useState<{ id: number; name: string; description: string; records_per_month: number; api_keys_limit: number; field_limit: number; price_monthly: number; stripe_price_id: string | null; active: boolean }[]>([]);
   const [tiersLoaded,       setTiersLoaded]       = useState(false);
   const [tierCheckoutLoading, setTierCheckoutLoading] = useState<Record<number, boolean>>({});
-  const [adminTiers,        setAdminTiers]        = useState<{ id: number; name: string; description: string; records_per_month: number; api_keys_limit: number; field_limit: number; price_monthly: number; stripe_price_id: string | null; active: boolean }[]>([]);
+  const [adminTiers,        setAdminTiers]        = useState<{ id: number; name: string; description: string; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number; stripe_price_id: string | null; active: boolean }[]>([]);
   const [editTierPrice,     setEditTierPrice]     = useState<Record<number, string>>({});
-  const [editTierFields,    setEditTierFields]    = useState<Record<number, { records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number }>>({});
+  const [editTierFields,    setEditTierFields]    = useState<Record<number, { records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number }>>({});
   const [tierPriceSaving,   setTierPriceSaving]   = useState<Record<number, boolean>>({});
   const [tierPriceSaved,    setTierPriceSaved]    = useState<Record<number, boolean>>({});
   const [revealedTierPriceIds, setRevealedTierPriceIds] = useState<Record<number, boolean>>({});
@@ -384,10 +384,10 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       const tiers = await tiersRes.json();
       setAdminTiers(tiers);
       const priceMap: Record<number, string> = {};
-      const fieldsMap: Record<number, { records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number }> = {};
-      tiers.forEach((t: { id: number; stripe_price_id: string | null; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number }) => {
+      const fieldsMap: Record<number, { records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number }> = {};
+      tiers.forEach((t: { id: number; stripe_price_id: string | null; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number }) => {
         priceMap[t.id] = t.stripe_price_id ?? "";
-        fieldsMap[t.id] = { records_per_month: t.records_per_month, api_keys_limit: t.api_keys_limit, diagnoses_per_month: t.diagnoses_per_month, field_limit: t.field_limit };
+        fieldsMap[t.id] = { records_per_month: t.records_per_month, api_keys_limit: t.api_keys_limit, diagnoses_per_month: t.diagnoses_per_month, field_limit: t.field_limit, price_monthly: t.price_monthly };
       });
       setEditTierPrice(priceMap);
       setEditTierFields(fieldsMap);
@@ -796,11 +796,12 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     const res = await apiFetch(`${API}/admin/enterprise-tiers/${tierId}`, {
       method: "PATCH", headers: h,
       body: JSON.stringify({
-        stripe_price_id:    editTierPrice[tierId] || null,
-        records_per_month:  fields.records_per_month,
-        api_keys_limit:     fields.api_keys_limit,
+        stripe_price_id:     editTierPrice[tierId] || null,
+        records_per_month:   fields.records_per_month,
+        api_keys_limit:      fields.api_keys_limit,
         diagnoses_per_month: fields.diagnoses_per_month,
-        field_limit:        fields.field_limit,
+        field_limit:         fields.field_limit,
+        price_monthly:       fields.price_monthly,
       }),
     });
     if (res.ok) {
@@ -2290,59 +2291,57 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                       )}
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {adminTiers.map(tier => (
-                          <div key={tier.id} style={{ backgroundColor: "var(--bg-surface-2)", borderRadius: 10, border: "1px solid var(--border)", padding: "14px 16px" }}>
-                            <p style={{ fontSize: "0.85rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 10 }}>
-                              {tier.name} — R${tier.price_monthly.toLocaleString("pt-BR")}/mês
-                            </p>
-                            {/* Numeric limits */}
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
-                              {[
-                                { label: "Registros/mês (0=∞)", key: "records_per_month" as const },
-                                { label: "API Keys máx.",        key: "api_keys_limit"     as const },
-                                { label: "Diagnósticos/mês (0=∞)", key: "diagnoses_per_month" as const },
-                                { label: "Campos custom",        key: "field_limit"        as const },
-                              ].map(({ label, key }) => (
-                                <div key={key}>
-                                  <label style={s.ingestLabel}>{label}</label>
-                                  <input type="number" min={0} style={s.ingestInput}
-                                    value={editTierFields[tier.id]?.[key] ?? 0}
-                                    onChange={e => setEditTierFields(p => ({
-                                      ...p, [tier.id]: { ...(p[tier.id] ?? {}), [key]: Number(e.target.value) }
-                                    } as typeof p))} />
-                                </div>
-                              ))}
-                            </div>
-                            {/* Stripe Price ID + Guardar */}
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>
+                          <div key={tier.id} style={{ backgroundColor: "var(--bg-surface-2)", borderRadius: 12, border: "1px solid var(--border)", padding: "18px 20px" }}>
+                            <p style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 14px 0", textTransform: "capitalize" as const }}>{tier.name}</p>
+                            {/* Row 1 — 3 limit fields (igual ao Professional) */}
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
                               <div>
-                                <label style={s.ingestLabel}>Stripe Price ID</label>
+                                <label style={s.ingestLabel}>Registros/mês (0=ilimitado)</label>
+                                <input type="number" min={0} step={10000} style={s.ingestInput}
+                                  value={editTierFields[tier.id]?.records_per_month ?? tier.records_per_month}
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly }; return { ...p, [tier.id]: { ...cur, records_per_month: Number(e.target.value) } }; })} />
+                              </div>
+                              <div>
+                                <label style={s.ingestLabel}>API Keys máx.</label>
+                                <input type="number" min={1} style={s.ingestInput}
+                                  value={editTierFields[tier.id]?.api_keys_limit ?? tier.api_keys_limit}
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly }; return { ...p, [tier.id]: { ...cur, api_keys_limit: Number(e.target.value) } }; })} />
+                              </div>
+                              <div>
+                                <label style={s.ingestLabel}>Diagnósticos/mês (0=ilimitado)</label>
+                                <input type="number" min={0} style={s.ingestInput}
+                                  value={editTierFields[tier.id]?.diagnoses_per_month ?? tier.diagnoses_per_month}
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly }; return { ...p, [tier.id]: { ...cur, diagnoses_per_month: Number(e.target.value) } }; })} />
+                              </div>
+                            </div>
+                            {/* Row 2 — campos + preço + stripe ID + guardar */}
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>
+                              <div>
+                                <label style={s.ingestLabel}>Limite de campos</label>
+                                <input type="number" min={1} style={s.ingestInput}
+                                  value={editTierFields[tier.id]?.field_limit ?? tier.field_limit}
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly }; return { ...p, [tier.id]: { ...cur, field_limit: Number(e.target.value) } }; })} />
+                              </div>
+                              <div>
+                                <label style={s.ingestLabel}>Preço mensal (BRL)</label>
+                                <input type="number" min={0} step={0.01} style={s.ingestInput}
+                                  value={editTierFields[tier.id]?.price_monthly ?? tier.price_monthly}
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly }; return { ...p, [tier.id]: { ...cur, price_monthly: Number(e.target.value) } }; })} />
+                              </div>
+                              <div>
+                                <label style={s.ingestLabel}>{t.admin.stripePriceId}</label>
                                 {editTierPrice[tier.id] ? (
                                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                                    <span style={{ ...s.ingestInput, display: "flex", alignItems: "center",
-                                      fontFamily: "var(--font-geist-mono)", fontSize: "0.78rem",
-                                      letterSpacing: revealedTierPriceIds[tier.id] ? "normal" : "0.12em",
-                                      color: "var(--text-secondary)",
-                                      userSelect: revealedTierPriceIds[tier.id] ? "text" as const : "none" as const,
-                                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
+                                    <span style={{ ...s.ingestInput, display: "flex", alignItems: "center", fontFamily: "var(--font-geist-mono)", fontSize: "0.78rem", letterSpacing: revealedTierPriceIds[tier.id] ? "normal" : "0.12em", color: "var(--text-secondary)", userSelect: revealedTierPriceIds[tier.id] ? "text" as const : "none" as const, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
                                       {revealedTierPriceIds[tier.id] ? editTierPrice[tier.id] : "••••••••••••••••"}
                                     </span>
-                                    <button type="button"
-                                      onClick={() => setRevealedTierPriceIds(p => ({ ...p, [tier.id]: !p[tier.id] }))}
-                                      style={s.diagnoseBtn}>
+                                    <button type="button" onClick={() => setRevealedTierPriceIds(p => ({ ...p, [tier.id]: !p[tier.id] }))} style={s.diagnoseBtn}>
                                       {revealedTierPriceIds[tier.id] ? t.admin.hide : t.admin.reveal}
                                     </button>
-                                    <button type="button"
-                                      onClick={() => {
-                                        navigator.clipboard.writeText(editTierPrice[tier.id]);
-                                        setCopiedTierPriceId(p => ({ ...p, [tier.id]: true }));
-                                        setTimeout(() => setCopiedTierPriceId(p => ({ ...p, [tier.id]: false })), 2000);
-                                      }}
-                                      style={s.copyBtn}>
+                                    <button type="button" onClick={() => { navigator.clipboard.writeText(editTierPrice[tier.id]); setCopiedTierPriceId(p => ({ ...p, [tier.id]: true })); setTimeout(() => setCopiedTierPriceId(p => ({ ...p, [tier.id]: false })), 2000); }} style={s.copyBtn}>
                                       {copiedTierPriceId[tier.id] ? t.admin.copied : t.admin.copy}
                                     </button>
-                                    <button type="button"
-                                      onClick={() => setEditTierPrice(p => ({ ...p, [tier.id]: "" }))}
-                                      style={{ ...s.diagnoseBtn, color: "var(--danger-text)" }}>
+                                    <button type="button" onClick={() => setEditTierPrice(p => ({ ...p, [tier.id]: "" }))} style={{ ...s.diagnoseBtn, color: "var(--danger-text)" }}>
                                       {t.admin.reveal === "Revelar" ? "Alterar" : "Change"}
                                     </button>
                                   </div>
@@ -2352,13 +2351,12 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                                     onChange={e => setEditTierPrice(p => ({ ...p, [tier.id]: e.target.value }))} />
                                 )}
                               </div>
-                              <button onClick={() => handleSaveTierPrice(tier.id)}
-                                disabled={tierPriceSaving[tier.id]}
+                              <button onClick={() => handleSaveTierPrice(tier.id)} disabled={tierPriceSaving[tier.id]}
                                 style={{ ...s.ingestBtn, opacity: tierPriceSaving[tier.id] ? 0.6 : 1, whiteSpace: "nowrap" as const }}>
-                                {tierPriceSaved[tier.id] ? "Guardado ✓" : tierPriceSaving[tier.id] ? "Guardando..." : "Guardar"}
+                                {tierPriceSaved[tier.id] ? t.admin.saved : tierPriceSaving[tier.id] ? t.admin.saving : t.admin.save}
                               </button>
-                            </div>{/* end price ID grid */}
-                          </div>{/* end tier card */}
+                            </div>
+                          </div>
                         ))}
                       </div>
                     </div>
