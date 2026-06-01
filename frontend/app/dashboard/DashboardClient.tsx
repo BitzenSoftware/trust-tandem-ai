@@ -153,6 +153,14 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [memberError,       setMemberError]       = useState("");
   const [pendingApproval,   setPendingApproval]   = useState<{ name: string; email_hint: string; cpf_hint: string; operator_approved_by: string | null }[]>([]);
   const [adminApproveLoading, setAdminApproveLoading] = useState<Record<string, boolean>>({});
+  const [showTierModal,     setShowTierModal]     = useState(false);
+  const [enterpriseTiers,   setEnterpriseTiers]   = useState<{ id: number; name: string; description: string; records_per_month: number; api_keys_limit: number; field_limit: number; price_monthly: number; stripe_price_id: string | null; active: boolean }[]>([]);
+  const [tiersLoaded,       setTiersLoaded]       = useState(false);
+  const [tierCheckoutLoading, setTierCheckoutLoading] = useState<Record<number, boolean>>({});
+  const [adminTiers,        setAdminTiers]        = useState<{ id: number; name: string; description: string; records_per_month: number; api_keys_limit: number; field_limit: number; price_monthly: number; stripe_price_id: string | null; active: boolean }[]>([]);
+  const [editTierPrice,     setEditTierPrice]     = useState<Record<number, string>>({});
+  const [tierPriceSaving,   setTierPriceSaving]   = useState<Record<number, boolean>>({});
+  const [tierPriceSaved,    setTierPriceSaved]    = useState<Record<number, boolean>>({});
 
   // ── Queue pagination ─────────────────────────────────────────────────────
   const QUEUE_PAGE_SIZE = 50;
@@ -354,9 +362,10 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const fetchAdminData = useCallback(async () => {
     const h = await getFreshHeaders();
     if (!h) return;
-    const [plansRes, secretsRes] = await Promise.all([
-      apiFetch(`${API}/admin/plans`,   { headers: h }),
-      apiFetch(`${API}/admin/secrets`, { headers: h }),
+    const [plansRes, secretsRes, tiersRes] = await Promise.all([
+      apiFetch(`${API}/admin/plans`,          { headers: h }),
+      apiFetch(`${API}/admin/secrets`,        { headers: h }),
+      apiFetch(`${API}/admin/enterprise-tiers`, { headers: h }),
     ]);
     if (plansRes.ok) {
       const configs: PlanConfig[] = await plansRes.json();
@@ -366,6 +375,13 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       setEditPlan(map);
     }
     if (secretsRes.ok) setSecrets(await secretsRes.json());
+    if (tiersRes.ok) {
+      const tiers = await tiersRes.json();
+      setAdminTiers(tiers);
+      const priceMap: Record<number, string> = {};
+      tiers.forEach((t: { id: number; stripe_price_id: string | null }) => { priceMap[t.id] = t.stripe_price_id ?? ""; });
+      setEditTierPrice(priceMap);
+    }
     setAdminLoaded(true);
     // Auto-sync Stripe prices in background — silently updates plan configs if key is configured
     apiFetch(`${API}/admin/stripe/sync`, { method: "POST", headers: h })
@@ -705,6 +721,51 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       fetchData();
     } catch { /* user can retry */ }
     finally { setApproveLoading(p => ({ ...p, [name]: false })); }
+  }
+
+  async function fetchEnterpriseTiers() {
+    const h = await getFreshHeaders();
+    if (!h) return;
+    const res = await apiFetch(`${API}/enterprise-tiers`, { headers: h });
+    if (res.ok) setEnterpriseTiers(await res.json());
+    setTiersLoaded(true);
+  }
+
+  async function handleTierCheckout(tierId: number) {
+    setTierCheckoutLoading(p => ({ ...p, [tierId]: true }));
+    const h = await getFreshHeaders();
+    if (!h) { setTierCheckoutLoading(p => ({ ...p, [tierId]: false })); return; }
+    try {
+      const res = await apiFetch(`${API}/subscription/checkout`, {
+        method: "POST", headers: h,
+        body: JSON.stringify({ plan_name: "enterprise", enterprise_tier_id: tierId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        window.location.href = data.checkout_url;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.detail ?? "Erro ao iniciar checkout.");
+      }
+    } catch { alert("Erro de ligação. Tente novamente."); }
+    finally { setTierCheckoutLoading(p => ({ ...p, [tierId]: false })); }
+  }
+
+  async function handleSaveTierPrice(tierId: number) {
+    setTierPriceSaving(p => ({ ...p, [tierId]: true }));
+    const h = await getFreshHeaders();
+    if (!h) { setTierPriceSaving(p => ({ ...p, [tierId]: false })); return; }
+    const res = await apiFetch(`${API}/enterprise-tiers/${tierId}`, {
+      method: "PATCH", headers: h,
+      body: JSON.stringify({ stripe_price_id: editTierPrice[tierId] || null }),
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      setAdminTiers(updated);
+      setTierPriceSaved(p => ({ ...p, [tierId]: true }));
+      setTimeout(() => setTierPriceSaved(p => ({ ...p, [tierId]: false })), 2000);
+    }
+    setTierPriceSaving(p => ({ ...p, [tierId]: false }));
   }
 
   async function handleAdminApprove(name: string) {
@@ -1930,9 +1991,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                       );
                     }
                     return (
-                      <button onClick={() => window.open("mailto:bitzensoftware@bitzen.app?subject=Trust%20%26%20Tandem%20AI%20%E2%80%94%20Plano%20Enterprise", "_blank")}
-                        style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer", fontSize: "0.78rem", fontWeight: 700, backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)" }}>
-                        {t.subscription.talkToExpert}
+                      <button onClick={() => { setShowTierModal(true); if (!tiersLoaded) fetchEnterpriseTiers(); }}
+                        style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer", fontSize: "0.78rem", fontWeight: 700, backgroundColor: "#1e293b", color: "#fff" }}>
+                        Customizar Plano →
                       </button>
                     );
                   }
@@ -2149,6 +2210,38 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                       );
                     })}
                   </div>
+
+                  {/* Enterprise Tiers */}
+                  {adminTiers.length > 0 && (
+                    <div style={{ marginTop: 24 }}>
+                      <p style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>Sub-planos Enterprise</p>
+                      <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: 12 }}>
+                        Configure o Stripe Price ID de cada tier. Sem Price ID o tier aparece como "Em breve" para o cliente.
+                      </p>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {adminTiers.map(tier => (
+                          <div key={tier.id} style={{ backgroundColor: "var(--bg-surface-2)", borderRadius: 10, border: "1px solid var(--border)", padding: "12px 16px" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>
+                              <div>
+                                <label style={s.ingestLabel}>{tier.name} — R${tier.price_monthly.toLocaleString("pt-BR")}/mês</label>
+                                <input type="text" placeholder="price_xxx" style={s.ingestInput}
+                                  value={editTierPrice[tier.id] ?? ""}
+                                  onChange={e => setEditTierPrice(p => ({ ...p, [tier.id]: e.target.value }))} />
+                              </div>
+                              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", paddingBottom: 10 }}>
+                                {tier.records_per_month > 0 ? `${tier.records_per_month.toLocaleString("pt-BR")} registros` : "Ilimitado"} · {tier.api_keys_limit >= 999 ? "∞" : tier.api_keys_limit} API Keys
+                              </div>
+                              <button onClick={() => handleSaveTierPrice(tier.id)}
+                                disabled={tierPriceSaving[tier.id]}
+                                style={{ ...s.ingestBtn, opacity: tierPriceSaving[tier.id] ? 0.6 : 1, whiteSpace: "nowrap" as const }}>
+                                {tierPriceSaved[tier.id] ? "Guardado ✓" : tierPriceSaving[tier.id] ? "Guardando..." : "Guardar"}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -2575,6 +2668,94 @@ export default function DashboardClient({ token: _token, userName }: { token: st
               </>
             )}
 
+          </div>
+        </div>
+      )}
+
+      {/* ── ENTERPRISE TIER MODAL ── */}
+      {showTierModal && (
+        <div style={{ position: "fixed" as const, inset: 0, zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.5)", padding: 24 }}>
+          <div style={{ backgroundColor: "var(--bg-surface)", borderRadius: 18, border: "1px solid var(--border)", boxShadow: "var(--shadow-lg)", width: "100%", maxWidth: 880, maxHeight: "90vh", overflowY: "auto" as const, padding: "32px 28px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
+              <div>
+                <h2 style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--text-primary)", marginBottom: 6, letterSpacing: "-0.02em" }}>
+                  Plano Enterprise
+                </h2>
+                <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", margin: 0 }}>
+                  Escolha o volume que melhor se encaixa na sua operação. Todos os planos incluem SLA, suporte dedicado e recursos ilimitados de compliance.
+                </p>
+              </div>
+              <button onClick={() => setShowTierModal(false)}
+                style={{ background: "none", border: "none", fontSize: "1.4rem", color: "var(--text-muted)", cursor: "pointer", padding: "0 4px", lineHeight: 1 }}>
+                ×
+              </button>
+            </div>
+
+            {!tiersLoaded ? (
+              <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>A carregar...</p>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 16 }}>
+                {enterpriseTiers.map(tier => {
+                  const isUnlimited = tier.records_per_month === 0;
+                  const loading = tierCheckoutLoading[tier.id];
+                  return (
+                    <div key={tier.id} style={{
+                      backgroundColor: "var(--bg-surface-2)", borderRadius: 14,
+                      border: "1px solid var(--border)", padding: "22px 20px",
+                      display: "flex", flexDirection: "column" as const, gap: 12,
+                    }}>
+                      <div>
+                        <p style={{ fontSize: "0.7rem", fontWeight: 700, letterSpacing: "0.06em", color: "var(--text-muted)", textTransform: "uppercase" as const, marginBottom: 4 }}>ENTERPRISE</p>
+                        <p style={{ fontSize: "1rem", fontWeight: 800, color: "var(--text-primary)", marginBottom: 6 }}>{tier.name}</p>
+                        <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", lineHeight: 1.5 }}>{tier.description}</p>
+                      </div>
+                      <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, display: "flex", flexDirection: "column" as const, gap: 6 }}>
+                        {[
+                          { label: "Registros/mês", val: isUnlimited ? "Ilimitado" : tier.records_per_month.toLocaleString("pt-BR") },
+                          { label: "API Keys",      val: tier.api_keys_limit >= 999 ? "Ilimitado" : String(tier.api_keys_limit) },
+                          { label: "Campos custom", val: tier.field_limit >= 999 ? "Ilimitado" : String(tier.field_limit) },
+                          { label: "Diagnósticos",  val: "Ilimitado" },
+                          { label: "Webhooks",      val: "Ilimitado" },
+                          { label: "Suporte",       val: "Dedicado 24/7" },
+                        ].map(f => (
+                          <div key={f.label} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem" }}>
+                            <span style={{ color: "var(--text-muted)" }}>{f.label}</span>
+                            <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{f.val}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ marginTop: "auto", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+                        <p style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--text-primary)", marginBottom: 2 }}>
+                          R${tier.price_monthly.toLocaleString("pt-BR")}
+                          <span style={{ fontSize: "0.75rem", fontWeight: 500, color: "var(--text-muted)" }}>/mês</span>
+                        </p>
+                        <button
+                          onClick={() => handleTierCheckout(tier.id)}
+                          disabled={loading || !tier.stripe_price_id}
+                          style={{
+                            width: "100%", padding: "10px 0", borderRadius: 9, border: "none",
+                            cursor: tier.stripe_price_id ? "pointer" : "not-allowed",
+                            fontSize: "0.82rem", fontWeight: 700, marginTop: 10,
+                            backgroundColor: tier.stripe_price_id ? "#1e293b" : "var(--bg-surface)",
+                            color: tier.stripe_price_id ? "#fff" : "var(--text-muted)",
+                            opacity: loading ? 0.6 : 1,
+                          }}>
+                          {loading ? "A processar..." : tier.stripe_price_id ? "Assinar agora" : "Em breve"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <p style={{ fontSize: "0.76rem", color: "var(--text-muted)", textAlign: "center" as const, marginTop: 20 }}>
+              Precisa de volume acima de 5M ou condições especiais?{" "}
+              <a href="mailto:bitzensoftware@bitzen.app?subject=Trust%20%26%20Tandem%20AI%20%E2%80%94%20Enterprise%20Custom"
+                style={{ color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}>
+                Fale com a nossa equipa
+              </a>
+            </p>
           </div>
         </div>
       )}
