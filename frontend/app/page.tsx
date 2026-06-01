@@ -360,14 +360,16 @@ export default function LandingPage() {
               }}>
                 Começar Gratuitamente →
               </Link>
-              <Link href="/login" style={{
-                padding: "13px 28px", backgroundColor: "var(--bg-surface)",
-                color: "var(--text-primary)", borderRadius: 10, textDecoration: "none",
-                fontSize: "0.9rem", fontWeight: 600, border: "1px solid var(--border)",
-                boxShadow: "var(--shadow-sm)",
-              }}>
+              <a href={`${process.env.NEXT_PUBLIC_API_URL}/docs`} target="_blank" rel="noopener noreferrer"
+                onClick={() => trackEvent("cta_click", { location: "hero", label: "Ver Documentação da API" })}
+                style={{
+                  padding: "13px 28px", backgroundColor: "var(--bg-surface)",
+                  color: "var(--text-primary)", borderRadius: 10, textDecoration: "none",
+                  fontSize: "0.9rem", fontWeight: 600, border: "1px solid var(--border)",
+                  boxShadow: "var(--shadow-sm)",
+                }}>
                 Ver Documentação da API
-              </Link>
+              </a>
             </div>
 
             <div style={{
