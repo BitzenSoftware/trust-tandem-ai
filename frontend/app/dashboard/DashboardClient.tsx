@@ -161,6 +161,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [editTierPrice,     setEditTierPrice]     = useState<Record<number, string>>({});
   const [tierPriceSaving,   setTierPriceSaving]   = useState<Record<number, boolean>>({});
   const [tierPriceSaved,    setTierPriceSaved]    = useState<Record<number, boolean>>({});
+  const [stripeSetupLoading, setStripeSetupLoading] = useState(false);
+  const [stripeSetupResult,  setStripeSetupResult]  = useState<{ id: number; name: string; status: string; price_id?: string; detail?: string }[] | null>(null);
 
   // ── Queue pagination ─────────────────────────────────────────────────────
   const QUEUE_PAGE_SIZE = 50;
@@ -749,6 +751,30 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       }
     } catch { alert("Erro de ligação. Tente novamente."); }
     finally { setTierCheckoutLoading(p => ({ ...p, [tierId]: false })); }
+  }
+
+  async function handleSetupStripe() {
+    if (!confirm("Isso vai criar produtos e preços no Stripe para todos os tiers Enterprise sem price ID. Continuar?")) return;
+    setStripeSetupLoading(true); setStripeSetupResult(null);
+    const h = await getFreshHeaders();
+    if (!h) { setStripeSetupLoading(false); return; }
+    try {
+      const res = await apiFetch(`${API}/admin/enterprise-tiers/setup-stripe`, { method: "POST", headers: h });
+      if (res.ok) {
+        const data = await res.json();
+        setStripeSetupResult(data.results);
+        if (data.tiers) {
+          setAdminTiers(data.tiers);
+          const pm: Record<number, string> = {};
+          data.tiers.forEach((t: { id: number; stripe_price_id: string | null }) => { pm[t.id] = t.stripe_price_id ?? ""; });
+          setEditTierPrice(pm);
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.detail ?? "Erro ao configurar Stripe.");
+      }
+    } catch { alert("Erro de ligação."); }
+    finally { setStripeSetupLoading(false); }
   }
 
   async function handleSaveTierPrice(tierId: number) {
@@ -2214,10 +2240,30 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                   {/* Enterprise Tiers */}
                   {adminTiers.length > 0 && (
                     <div style={{ marginTop: 24 }}>
-                      <p style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>Sub-planos Enterprise</p>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                        <p style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Sub-planos Enterprise</p>
+                        <button onClick={handleSetupStripe} disabled={stripeSetupLoading}
+                          style={{ ...s.diagnoseBtn, fontSize: "0.76rem", fontWeight: 700, opacity: stripeSetupLoading ? 0.6 : 1 }}>
+                          {stripeSetupLoading ? "A criar no Stripe..." : "⚡ Criar produtos no Stripe"}
+                        </button>
+                      </div>
                       <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: 12 }}>
-                        Configure o Stripe Price ID de cada tier. Sem Price ID o tier aparece como "Em breve" para o cliente.
+                        Clique em "Criar produtos no Stripe" para gerar automaticamente os produtos e preços. Depois edite os Price IDs manualmente se necessário.
                       </p>
+                      {stripeSetupResult && (
+                        <div style={{ marginBottom: 12, display: "flex", flexDirection: "column" as const, gap: 4 }}>
+                          {stripeSetupResult.map(r => (
+                            <div key={r.id} style={{ fontSize: "0.76rem", padding: "6px 12px", borderRadius: 6,
+                              backgroundColor: r.status === "created" ? "var(--success-subtle)" : r.status === "skipped" ? "var(--bg-surface-2)" : "var(--danger-subtle)",
+                              color: r.status === "created" ? "var(--success-text)" : r.status === "skipped" ? "var(--text-muted)" : "var(--danger-text)",
+                              border: `1px solid ${r.status === "created" ? "var(--success)" : r.status === "skipped" ? "var(--border)" : "var(--danger)"}` }}>
+                              {r.status === "created" ? "✓" : r.status === "skipped" ? "—" : "✗"} {r.name}
+                              {r.price_id && <span style={{ marginLeft: 8, opacity: 0.7 }}>{r.price_id}</span>}
+                              {r.detail && <span style={{ marginLeft: 8 }}>{r.detail}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {adminTiers.map(tier => (
                           <div key={tier.id} style={{ backgroundColor: "var(--bg-surface-2)", borderRadius: 10, border: "1px solid var(--border)", padding: "12px 16px" }}>
