@@ -1136,7 +1136,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                 {queue.length > 0 && <span style={s.badge}>{queue.length}</span>}
               </span>
             </button>
-            <button onClick={() => setTab("ingest")} style={tab === "ingest" ? s.tabActive : s.tabInactive}>
+            <button onClick={() => { setTab("ingest"); if (!schemaLoaded) fetchSchema(); }} style={tab === "ingest" ? s.tabActive : s.tabInactive}>
               {t.ingest.tab}
             </button>
             {userRole === "admin" && (
