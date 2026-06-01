@@ -445,6 +445,7 @@ class EnterpriseTierPriceIn(BaseModel):
     api_keys_limit:      Optional[int]   = None
     diagnoses_per_month: Optional[int]   = None
     field_limit:         Optional[int]   = None
+    workspaces_limit:    Optional[int]   = None
 
 
 class EnterpriseClientIn(BaseModel):
@@ -1399,6 +1400,7 @@ def actualizar_enterprise_tier(tier_id: int, body: EnterpriseTierPriceIn):
         tier_id, body.stripe_price_id, body.price_monthly,
         body.records_per_month, body.api_keys_limit,
         body.diagnoses_per_month, body.field_limit,
+        body.workspaces_limit,
     )
     return repository.get_enterprise_tiers(active_only=False)
 
@@ -1495,7 +1497,7 @@ def listar_workspaces(tenant_id: str = Depends(_get_tenant_id)):
               summary="Cria um novo workspace")
 def criar_workspace(body: WorkspaceIn, tenant_id: str = Depends(_get_tenant_id)):
     plan = repository.get_tenant_plan(tenant_id)
-    limit = repository.get_workspaces_limit(plan)
+    limit = repository.get_workspaces_limit(plan, tenant_id)
     all_workspaces = repository.get_workspaces(tenant_id)
     # Principal workspace doesn't count against the limit
     current_count = len([w for w in all_workspaces if w.get("name") != "Principal"])

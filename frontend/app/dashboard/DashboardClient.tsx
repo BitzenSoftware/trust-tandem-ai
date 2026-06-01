@@ -176,9 +176,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [enterpriseTiers,   setEnterpriseTiers]   = useState<{ id: number; name: string; description: string; records_per_month: number; api_keys_limit: number; field_limit: number; price_monthly: number; stripe_price_id: string | null; active: boolean }[]>([]);
   const [tiersLoaded,       setTiersLoaded]       = useState(false);
   const [tierCheckoutLoading, setTierCheckoutLoading] = useState<Record<number, boolean>>({});
-  const [adminTiers,        setAdminTiers]        = useState<{ id: number; name: string; description: string; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number; stripe_price_id: string | null; active: boolean }[]>([]);
+  const [adminTiers,        setAdminTiers]        = useState<{ id: number; name: string; description: string; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number; stripe_price_id: string | null; active: boolean; workspaces_limit: number }[]>([]);
   const [editTierPrice,     setEditTierPrice]     = useState<Record<number, string>>({});
-  const [editTierFields,    setEditTierFields]    = useState<Record<number, { records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number }>>({});
+  const [editTierFields,    setEditTierFields]    = useState<Record<number, { records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number; workspaces_limit: number }>>({});
   const [tierPriceSaving,   setTierPriceSaving]   = useState<Record<number, boolean>>({});
   const [tierPriceSaved,    setTierPriceSaved]    = useState<Record<number, boolean>>({});
   const [revealedTierPriceIds, setRevealedTierPriceIds] = useState<Record<number, boolean>>({});
@@ -473,10 +473,10 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       const tiers = await tiersRes.json();
       setAdminTiers(tiers);
       const priceMap: Record<number, string> = {};
-      const fieldsMap: Record<number, { records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number }> = {};
-      tiers.forEach((t: { id: number; stripe_price_id: string | null; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number }) => {
+      const fieldsMap: Record<number, { records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number; workspaces_limit: number }> = {};
+      tiers.forEach((t: { id: number; stripe_price_id: string | null; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; field_limit: number; price_monthly: number; workspaces_limit: number }) => {
         priceMap[t.id] = t.stripe_price_id ?? "";
-        fieldsMap[t.id] = { records_per_month: t.records_per_month, api_keys_limit: t.api_keys_limit, diagnoses_per_month: t.diagnoses_per_month, field_limit: t.field_limit, price_monthly: t.price_monthly };
+        fieldsMap[t.id] = { records_per_month: t.records_per_month, api_keys_limit: t.api_keys_limit, diagnoses_per_month: t.diagnoses_per_month, field_limit: t.field_limit, price_monthly: t.price_monthly, workspaces_limit: t.workspaces_limit ?? 999 };
       });
       setEditTierPrice(priceMap);
       setEditTierFields(fieldsMap);
@@ -950,6 +950,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
         diagnoses_per_month: fields.diagnoses_per_month,
         field_limit:         fields.field_limit,
         price_monthly:       fields.price_monthly,
+        workspaces_limit:    fields.workspaces_limit,
       }),
     });
     if (res.ok) {
@@ -2678,25 +2679,31 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                         {adminTiers.map(tier => (
                           <div key={tier.id} style={{ backgroundColor: "var(--bg-surface-2)", borderRadius: 12, border: "1px solid var(--border)", padding: "18px 20px" }}>
                             <p style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 14px 0", textTransform: "capitalize" as const }}>{tier.name}</p>
-                            {/* Row 1 — 3 limit fields (igual ao Professional) */}
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+                            {/* Row 1 — 4 limit fields */}
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
                               <div>
                                 <label style={s.ingestLabel}>Registros/mês (0=ilimitado)</label>
                                 <input type="number" min={0} step={10000} style={s.ingestInput}
                                   value={editTierFields[tier.id]?.records_per_month ?? tier.records_per_month}
-                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly }; return { ...p, [tier.id]: { ...cur, records_per_month: Number(e.target.value) } }; })} />
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly, workspaces_limit: tier.workspaces_limit ?? 999 }; return { ...p, [tier.id]: { ...cur, records_per_month: Number(e.target.value) } }; })} />
                               </div>
                               <div>
                                 <label style={s.ingestLabel}>API Keys máx.</label>
                                 <input type="number" min={1} style={s.ingestInput}
                                   value={editTierFields[tier.id]?.api_keys_limit ?? tier.api_keys_limit}
-                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly }; return { ...p, [tier.id]: { ...cur, api_keys_limit: Number(e.target.value) } }; })} />
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly, workspaces_limit: tier.workspaces_limit ?? 999 }; return { ...p, [tier.id]: { ...cur, api_keys_limit: Number(e.target.value) } }; })} />
                               </div>
                               <div>
                                 <label style={s.ingestLabel}>Diagnósticos/mês (0=ilimitado)</label>
                                 <input type="number" min={0} style={s.ingestInput}
                                   value={editTierFields[tier.id]?.diagnoses_per_month ?? tier.diagnoses_per_month}
-                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly }; return { ...p, [tier.id]: { ...cur, diagnoses_per_month: Number(e.target.value) } }; })} />
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly, workspaces_limit: tier.workspaces_limit ?? 999 }; return { ...p, [tier.id]: { ...cur, diagnoses_per_month: Number(e.target.value) } }; })} />
+                              </div>
+                              <div>
+                                <label style={s.ingestLabel}>Workspaces máx. (999=ilimitado)</label>
+                                <input type="number" min={1} style={s.ingestInput}
+                                  value={editTierFields[tier.id]?.workspaces_limit ?? tier.workspaces_limit ?? 999}
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly, workspaces_limit: tier.workspaces_limit ?? 999 }; return { ...p, [tier.id]: { ...cur, workspaces_limit: Number(e.target.value) } }; })} />
                               </div>
                             </div>
                             {/* Row 2 — campos + preço + stripe ID + guardar */}
@@ -2705,13 +2712,13 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                                 <label style={s.ingestLabel}>Limite de campos</label>
                                 <input type="number" min={1} style={s.ingestInput}
                                   value={editTierFields[tier.id]?.field_limit ?? tier.field_limit}
-                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly }; return { ...p, [tier.id]: { ...cur, field_limit: Number(e.target.value) } }; })} />
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly, workspaces_limit: tier.workspaces_limit ?? 999 }; return { ...p, [tier.id]: { ...cur, field_limit: Number(e.target.value) } }; })} />
                               </div>
                               <div>
                                 <label style={s.ingestLabel}>Preço mensal (BRL)</label>
                                 <input type="number" min={0} step={0.01} style={s.ingestInput}
                                   value={editTierFields[tier.id]?.price_monthly ?? tier.price_monthly}
-                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly }; return { ...p, [tier.id]: { ...cur, price_monthly: Number(e.target.value) } }; })} />
+                                  onChange={e => setEditTierFields(p => { const cur = p[tier.id] ?? { records_per_month: tier.records_per_month, api_keys_limit: tier.api_keys_limit, diagnoses_per_month: tier.diagnoses_per_month, field_limit: tier.field_limit, price_monthly: tier.price_monthly, workspaces_limit: tier.workspaces_limit ?? 999 }; return { ...p, [tier.id]: { ...cur, price_monthly: Number(e.target.value) } }; })} />
                               </div>
                               <div>
                                 <label style={s.ingestLabel}>{t.admin.stripePriceId}</label>

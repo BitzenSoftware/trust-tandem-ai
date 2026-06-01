@@ -1342,7 +1342,7 @@ def get_plan_field_limit(plan_name: str, tenant_id: str | None = None) -> int:
 def get_enterprise_tiers(active_only: bool = True) -> list[dict]:
     if USE_SUPABASE:
         params: dict = {
-            "select": "id,name,description,records_per_month,api_keys_limit,diagnoses_per_month,field_limit,price_monthly,stripe_price_id,active,sort_order",
+            "select": "id,name,description,records_per_month,api_keys_limit,diagnoses_per_month,field_limit,price_monthly,stripe_price_id,active,sort_order,workspaces_limit",
             "order": "sort_order.asc",
         }
         if active_only:
@@ -1375,6 +1375,7 @@ def upsert_enterprise_tier_price(
     api_keys_limit: int | None = None,
     diagnoses_per_month: int | None = None,
     field_limit: int | None = None,
+    workspaces_limit: int | None = None,
 ) -> None:
     if USE_SUPABASE:
         payload: dict = {"stripe_price_id": stripe_price_id}
@@ -1383,6 +1384,7 @@ def upsert_enterprise_tier_price(
         if api_keys_limit      is not None: payload["api_keys_limit"]      = api_keys_limit
         if diagnoses_per_month is not None: payload["diagnoses_per_month"] = diagnoses_per_month
         if field_limit         is not None: payload["field_limit"]         = field_limit
+        if workspaces_limit    is not None: payload["workspaces_limit"]    = workspaces_limit
         _http.patch(
             f"{_SUPABASE_URL}/rest/v1/enterprise_tiers",
             json=payload,
@@ -1502,8 +1504,12 @@ def remove_workspace_member(workspace_id: int, email: str) -> None:
         ).raise_for_status()
 
 
-def get_workspaces_limit(plan_name: str) -> int:
-    """Returns the workspace limit for a plan."""
+def get_workspaces_limit(plan_name: str, tenant_id: str | None = None) -> int:
+    """Returns the workspace limit for a plan. For enterprise, resolves tier-specific limit."""
+    if plan_name == "enterprise" and tenant_id:
+        tier = get_enterprise_tier_for_tenant(tenant_id)
+        if tier:
+            return tier.get("workspaces_limit", 999)
     configs = get_plan_configs()
     cfg = next((c for c in configs if c["plan_name"] == plan_name), None)
     if cfg:
