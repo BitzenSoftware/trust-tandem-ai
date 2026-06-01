@@ -157,15 +157,12 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
   const [webhookCurrent, setWebhookCurrent] = useState<{ url: string; secret: string; active: boolean } | null>(null);
   const [webhookLoading, setWebhookLoading] = useState(false);
-  const [, setSettingsLoaded] = useState(false);
   const [trialExpired,      setTrialExpired]      = useState(false);
   const [dbTotal,           setDbTotal]           = useState<number | null>(null);
   const [exportRowsPerFile, setExportRowsPerFile] = useState(10000);
   const [exportProgress,    setExportProgress]    = useState<{ part: number } | null>(null);
   const [userRole,          setUserRole]          = useState<"admin" | "operator" | "viewer">("admin");
   const [members,           setMembers]           = useState<{ id: number; email: string; role: string; invited_by: string | null; created_at: string }[]>([]);
-  const [, setMembersLoaded]     = useState(false);
-  const [newMember,         setNewMember]         = useState({ email: "", role: "operator" });
   // Add user modal
   const [showAddUserModal,  setShowAddUserModal]  = useState(false);
   const [addUserTab,        setAddUserTab]        = useState<"utilizador" | "area" | "acessos">("utilizador");
@@ -311,9 +308,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       } else {
         setWebhookCurrent(null); setWebhookUrl("");
       }
-      if (membersRes.ok) { setMembers(await membersRes.json()); setMembersLoaded(true); }
+      if (membersRes.ok) setMembers(await membersRes.json());
     } catch { /* ignore */ }
-    finally { setSettingsLoaded(true); }
   }, [activeWorkspace]);
 
 
@@ -372,17 +368,6 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     setMembers(prev => prev.filter(m => m.email !== email));
   }
 
-  async function handleChangeMemberRole(email: string, role: string) {
-    const h = await getFreshHeaders();
-    if (!h) return;
-    const res = await apiFetch(`${API}/members/${encodeURIComponent(email)}`, {
-      method: "PATCH", headers: h,
-      body: JSON.stringify({ email, role }),
-    });
-    if (res.ok) {
-      setMembers(prev => prev.map(m => m.email === email ? { ...m, role } : m));
-    }
-  }
 
   const fetchSchema = useCallback(async () => {
     const h = await getFreshHeaders();
