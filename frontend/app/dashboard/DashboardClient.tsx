@@ -280,22 +280,25 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const fetchSettings = useCallback(async () => {
     const h = await getFreshHeaders();
     if (!h) return;
+    const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
     try {
       const [keysRes, whRes, membersRes] = await Promise.all([
-        apiFetch(`${API}/keys`,    { headers: h }),
-        apiFetch(`${API}/webhook`, { headers: h }),
-        apiFetch(`${API}/members`, { headers: h }),
+        apiFetch(`${API}/keys${wsParam}`,    { headers: h }),
+        apiFetch(`${API}/webhook${wsParam}`, { headers: h }),
+        apiFetch(`${API}/members`,           { headers: h }),
       ]);
       if (keysRes.ok) setApiKeys(await keysRes.json());
       if (whRes.ok) {
         const wh = await whRes.json();
         setWebhookCurrent(wh);
         setWebhookUrl(wh.url);
+      } else {
+        setWebhookCurrent(null); setWebhookUrl("");
       }
       if (membersRes.ok) { setMembers(await membersRes.json()); setMembersLoaded(true); }
     } catch { /* ignore */ }
     finally { setSettingsLoaded(true); }
-  }, []);
+  }, [activeWorkspace]);
 
   async function handleAddMember() {
     if (!newMember.email) return;
@@ -916,7 +919,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     const h = await getFreshHeaders();
     if (!h) { setKeyLoading(false); return; }
     try {
-      const res = await apiFetch(`${API}/keys`, {
+      const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+      const res = await apiFetch(`${API}/keys${wsParam}`, {
         method: "POST", headers: h,
         body: JSON.stringify({ label: newKeyLabel || null }),
       });
@@ -933,7 +937,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   async function handleRevokeKey(id: number) {
     const h = await getFreshHeaders();
     if (!h) return;
-    await apiFetch(`${API}/keys/${id}`, { method: "DELETE", headers: h });
+    const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+    await apiFetch(`${API}/keys/${id}${wsParam}`, { method: "DELETE", headers: h });
     fetchSettings();
   }
 
@@ -943,7 +948,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     const h = await getFreshHeaders();
     if (!h) { setWebhookLoading(false); return; }
     try {
-      const res = await apiFetch(`${API}/webhook`, {
+      const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+      const res = await apiFetch(`${API}/webhook${wsParam}`, {
         method: "POST", headers: h,
         body: JSON.stringify({ url: webhookUrl }),
       });
@@ -1058,7 +1064,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   async function handleDeleteWebhook() {
     const h = await getFreshHeaders();
     if (!h) return;
-    await apiFetch(`${API}/webhook`, { method: "DELETE", headers: h });
+    const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+    await apiFetch(`${API}/webhook${wsParam}`, { method: "DELETE", headers: h });
     setWebhookCurrent(null); setWebhookUrl(""); setWebhookSecret(null);
   }
 
@@ -1350,7 +1357,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
               {t.ingest.tab}
             </button>
             {userRole === "admin" && (
-              <button onClick={() => { setTab("settings"); if (!settingsLoaded) fetchSettings(); }} style={tab === "settings" ? s.tabActive : s.tabInactive}>
+              <button onClick={() => { setTab("settings"); fetchSettings(); }} style={tab === "settings" ? s.tabActive : s.tabInactive}>
                 {t.settings.tab}
               </button>
             )}
