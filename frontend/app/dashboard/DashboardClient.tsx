@@ -88,10 +88,6 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [workspaces, setWorkspaces] = useState<{ id: number; name: string; description: string; created_at: string }[]>([]);
   const [activeWorkspace, setActiveWorkspace] = useState<number | null>(null);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
-  const [workspaceMembers, setWorkspaceMembers] = useState<{ id: number; workspace_id: number; email: string; role: string; invited_by: string | null; accepted: boolean; created_at: string }[]>([]);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("operator");
-  const [inviteLoading, setInviteLoading] = useState(false);
   const [ingestMode,    setIngestMode]    = useState<"csv" | "manual">("csv");
   const [csvData,       setCsvData]       = useState<Record<string, string>[]>([]);
   const [csvColumns,    setCsvColumns]    = useState<string[]>([]);
@@ -168,10 +164,8 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   const [exportProgress,    setExportProgress]    = useState<{ part: number } | null>(null);
   const [userRole,          setUserRole]          = useState<"admin" | "operator" | "viewer">("admin");
   const [members,           setMembers]           = useState<{ id: number; email: string; role: string; invited_by: string | null; created_at: string }[]>([]);
-  const [membersLoaded,     setMembersLoaded]     = useState(false);
+  const [, setMembersLoaded]     = useState(false);
   const [newMember,         setNewMember]         = useState({ email: "", role: "operator" });
-  const [memberSaving,      setMemberSaving]      = useState(false);
-  const [memberError,       setMemberError]       = useState("");
   // Add user modal
   const [showAddUserModal,  setShowAddUserModal]  = useState(false);
   const [addUserTab,        setAddUserTab]        = useState<"utilizador" | "area" | "acessos">("utilizador");
@@ -322,27 +316,6 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     finally { setSettingsLoaded(true); }
   }, [activeWorkspace]);
 
-  async function handleAddMember() {
-    if (!newMember.email) return;
-    setMemberSaving(true); setMemberError("");
-    const h = await getFreshHeaders();
-    if (!h) { setMemberSaving(false); return; }
-    try {
-      const res = await apiFetch(`${API}/members`, {
-        method: "POST", headers: h,
-        body: JSON.stringify(newMember),
-      });
-      if (res.ok) {
-        setNewMember({ email: "", role: "operator" });
-        const membersRes = await apiFetch(`${API}/members`, { headers: h });
-        if (membersRes.ok) setMembers(await membersRes.json());
-      } else {
-        const b = await res.json().catch(() => ({}));
-        setMemberError(b.detail || `Erro ${res.status}`);
-      }
-    } catch { setMemberError("Erro de conexão."); }
-    finally { setMemberSaving(false); }
-  }
 
   const USER_MENUS = [
     { key: "dashboard", label: "Dashboard" },
@@ -524,46 +497,6 @@ export default function DashboardClient({ token: _token, userName }: { token: st
   }, [activeWorkspace]);
 
 
-  const fetchWorkspaceMembers = useCallback(async (wsId: number) => {
-    const h = await getFreshHeaders();
-    if (!h) return;
-    try {
-      const res = await apiFetch(`${API}/workspaces/${wsId}/members`, { headers: h });
-      if (res.ok) setWorkspaceMembers(await res.json());
-    } catch { /* ignore */ }
-  }, []);
-
-  async function handleInviteWorkspaceMember(wsId: number) {
-    if (!inviteEmail || !inviteRole) return;
-    setInviteLoading(true);
-    const h = await getFreshHeaders();
-    if (!h) { setInviteLoading(false); return; }
-    try {
-      const res = await apiFetch(`${API}/workspaces/${wsId}/members`, {
-        method: "POST", headers: h,
-        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
-      });
-      if (res.ok) {
-        setInviteEmail("");
-        setInviteRole("operator");
-        await fetchWorkspaceMembers(wsId);
-      } else alert("Erro ao convidar membro.");
-    } catch { alert("Erro de ligação."); }
-    finally { setInviteLoading(false); }
-  }
-
-  async function handleRemoveWorkspaceMember(wsId: number, email: string) {
-    if (!confirm(`Remover ${email}?`)) return;
-    const h = await getFreshHeaders();
-    if (!h) return;
-    try {
-      const res = await apiFetch(`${API}/workspaces/${wsId}/members/${email}`, {
-        method: "DELETE", headers: h,
-      });
-      if (res.ok) await fetchWorkspaceMembers(wsId);
-      else alert("Erro ao remover membro.");
-    } catch { alert("Erro de ligação."); }
-  }
 
   async function handleSavePlan(plan_name: string) {
     const cfg = editPlan[plan_name];
@@ -1384,7 +1317,6 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                   const val = e.target.value;
                   const wsId = val === "" ? null : Number(val);
                   setActiveWorkspace(wsId);
-                  if (wsId) fetchWorkspaceMembers(wsId);
                 }}
                 style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", fontSize: "0.84rem", fontWeight: 600, cursor: "pointer" }}>
                 <option value="">Principal</option>
@@ -2493,7 +2425,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                     {addUserTab === "area" && (
                       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginBottom: 8 }}>Seleccione a área (workspace) a que este utilizador pertence.</p>
-                        {[{ id: null, name: "Principal" }, ...workspaces].map(ws => (
+                        {[{ id: null, name: "Principal" }, ...workspaces.filter(w => w.name !== "Principal")].map(ws => (
                           <label key={ws.id ?? "principal"} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
                             borderRadius: 10, border: `1px solid ${addUserWorkspace === ws.id ? "var(--accent)" : "var(--border)"}`,
                             backgroundColor: addUserWorkspace === ws.id ? "var(--accent-subtle)" : "var(--bg-surface-2)", cursor: "pointer" }}>
