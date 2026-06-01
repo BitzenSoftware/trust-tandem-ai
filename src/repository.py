@@ -1148,8 +1148,32 @@ def upsert_plan_config(
         ).raise_for_status()
 
 
-def get_plan_limits(plan_name: str) -> dict:
-    """Returns all limits for a given plan."""
+def get_enterprise_tier_for_tenant(tenant_id: str) -> dict | None:
+    """Returns the enterprise tier a tenant subscribed to, via their stripe_price_id."""
+    config = get_enterprise_config(tenant_id)
+    if not config:
+        return None
+    price_id = config.get("stripe_price_id")
+    if not price_id:
+        return None
+    try:
+        tiers = get_enterprise_tiers(active_only=False)
+        return next((t for t in tiers if t.get("stripe_price_id") == price_id), None)
+    except Exception:
+        return None
+
+
+def get_plan_limits(plan_name: str, tenant_id: str | None = None) -> dict:
+    """Returns all limits for a given plan. For enterprise, resolves tier-specific limits."""
+    if plan_name == "enterprise" and tenant_id:
+        tier = get_enterprise_tier_for_tenant(tenant_id)
+        if tier:
+            return {
+                "field_limit":          tier.get("field_limit", 999),
+                "records_per_month":    tier.get("records_per_month", 0),
+                "api_keys_limit":       tier.get("api_keys_limit", 999),
+                "diagnoses_per_month":  tier.get("diagnoses_per_month", 0),
+            }
     configs = get_plan_configs()
     cfg = next((c for c in configs if c["plan_name"] == plan_name), None)
     if cfg:
@@ -1160,7 +1184,12 @@ def get_plan_limits(plan_name: str) -> dict:
             "api_keys_limit": defaults["api_keys_limit"], "diagnoses_per_month": defaults["diagnoses_per_month"]}
 
 
-def get_plan_field_limit(plan_name: str) -> int:
+def get_plan_field_limit(plan_name: str, tenant_id: str | None = None) -> int:
+    """Returns field limit. For enterprise, resolves tier-specific limit."""
+    if plan_name == "enterprise" and tenant_id:
+        tier = get_enterprise_tier_for_tenant(tenant_id)
+        if tier:
+            return tier.get("field_limit", 999)
     if USE_SUPABASE:
         try:
             resp = _http.get(
