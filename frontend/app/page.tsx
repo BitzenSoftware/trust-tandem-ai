@@ -120,7 +120,7 @@ const PLAN_META: Record<string, { displayName: string; desc: string; highlight: 
   professional: {
     displayName: "Professional",
     desc: "Para fintechs, seguradoras e mid-market com alto volume de registros recorrentes.",
-    highlight: true, cta: "Agendar Demonstração", ctaHref: "/register",
+    highlight: true, cta: "Começar Gratuitamente", ctaHref: "/register",
     staticFeatures: ["Webhooks ilimitados com HMAC-SHA256", "Suporte prioritário por e-mail", "SLA 99,9% de uptime"],
   },
   enterprise: {
@@ -353,12 +353,12 @@ export default function LandingPage() {
             </p>
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <Link href="/register" onClick={() => trackEvent("cta_click", { location: "hero", label: "Agendar Demonstração" })} style={{
+              <Link href="/register" onClick={() => trackEvent("cta_click", { location: "hero", label: "Começar Gratuitamente" })} style={{
                 padding: "13px 28px", backgroundColor: "var(--accent)", color: "#fff",
                 borderRadius: 10, textDecoration: "none", fontSize: "0.9rem", fontWeight: 700,
                 boxShadow: "0 4px 14px rgba(59,130,246,.35)",
               }}>
-                Agendar Demonstração →
+                Começar Gratuitamente →
               </Link>
               <Link href="/login" style={{
                 padding: "13px 28px", backgroundColor: "var(--bg-surface)",
