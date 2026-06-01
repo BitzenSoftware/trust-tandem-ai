@@ -1345,4 +1345,52 @@ def actualizar_enterprise_tier(tier_id: int, body: EnterpriseTierPriceIn):
     return repository.get_enterprise_tiers(active_only=False)
 
 
+@_router.post("/admin/enterprise-tiers/setup-stripe",
+              summary="Cria produtos e preços Enterprise no Stripe e guarda price IDs [super admin]",
+              dependencies=[Depends(_require_super_admin)])
+def setup_enterprise_tiers_stripe():
+    import stripe as _stripe
+    stripe_key = _get_stripe_key()
+    if not stripe_key:
+        raise HTTPException(status_code=503, detail="Stripe não configurado no servidor.")
+    _stripe.api_key = stripe_key
+
+    tiers = repository.get_enterprise_tiers(active_only=False)
+    results = []
+    for tier in tiers:
+        try:
+            if tier.get("stripe_price_id"):
+                results.append({"id": tier["id"], "name": tier["name"], "status": "skipped", "price_id": tier["stripe_price_id"]})
+                continue
+
+            rec = tier["records_per_month"]
+            rec_label = "Ilimitado" if rec == 0 else f"{rec:,}".replace(",", ".")
+
+            product = _stripe.Product.create(
+                name=f"Trust & Tandem AI — {tier['name']}",
+                description=tier.get("description") or f"Enterprise {rec_label} registros/mês",
+                metadata={
+                    "tier_id":          str(tier["id"]),
+                    "records_per_month": str(rec),
+                    "api_keys_limit":    str(tier["api_keys_limit"]),
+                    "plan_name":         "enterprise",
+                },
+            )
+            unit_amount = int(float(tier["price_monthly"]) * 100)
+            price = _stripe.Price.create(
+                product=product.id,
+                unit_amount=unit_amount,
+                currency="brl",
+                recurring={"interval": "month"},
+                metadata={"tier_id": str(tier["id"]), "plan_name": "enterprise"},
+            )
+            repository.upsert_enterprise_tier_price(tier["id"], price.id, float(tier["price_monthly"]))
+            results.append({"id": tier["id"], "name": tier["name"], "status": "created",
+                            "product_id": product.id, "price_id": price.id})
+        except Exception as exc:
+            results.append({"id": tier["id"], "name": tier["name"], "status": "error", "detail": str(exc)})
+
+    return {"results": results, "tiers": repository.get_enterprise_tiers(active_only=False)}
+
+
 app.include_router(_router)
