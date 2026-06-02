@@ -284,6 +284,13 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     fetchData();
   }, [fetchData]);
 
+  // Re-fetch tab-specific data when workspace changes (without re-doing the 55s warm-up)
+  useEffect(() => {
+    if (tab === "settings") fetchSettings();
+    if (tab === "schema") { setSchema([]); setSchemaLoaded(false); fetchSchema(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWorkspace]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
