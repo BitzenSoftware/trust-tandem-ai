@@ -107,3 +107,33 @@ class TestReset:
         client.delete("/api/v1/reset")
         assert client.get("/api/v1/database").json() == []
         assert client.get("/api/v1/review-queue").json() == []
+
+
+class TestWorkspaceIsolation:
+    """Phase 2 — data must be isolated per workspace (regression guard)."""
+
+    def test_ingest_with_workspace_id(self, client):
+        res = client.post("/api/v1/ingest", json=[VALID], params={"workspace_id": 1})
+        assert res.status_code == 202
+        assert res.json()["registros_banco_limpo"] == 1
+
+    def test_database_filters_by_workspace(self, client):
+        client.post("/api/v1/ingest", json=[VALID], params={"workspace_id": 1})
+        client.post("/api/v1/ingest", json=[VALID], params={"workspace_id": 2})
+        assert len(client.get("/api/v1/database", params={"workspace_id": 1}).json()) == 1
+        assert len(client.get("/api/v1/database", params={"workspace_id": 2}).json()) == 1
+        # Principal (null) must NOT see workspace-scoped records
+        assert client.get("/api/v1/database").json() == []
+
+    def test_review_queue_filters_by_workspace(self, client):
+        client.post("/api/v1/ingest", json=[INVALID], params={"workspace_id": 1})
+        client.post("/api/v1/ingest", json=[NULL], params={"workspace_id": 2})
+        q1 = client.get("/api/v1/review-queue", params={"workspace_id": 1}).json()
+        q2 = client.get("/api/v1/review-queue", params={"workspace_id": 2}).json()
+        assert len(q1) == 1 and q1[0]["name"] == "João Errado"
+        assert len(q2) == 1 and q2[0]["name"] == "Maria Nula"
+
+    def test_count_filters_by_workspace(self, client):
+        client.post("/api/v1/ingest", json=[VALID], params={"workspace_id": 1})
+        assert client.get("/api/v1/database/count", params={"workspace_id": 1}).json()["count"] == 1
+        assert client.get("/api/v1/database/count", params={"workspace_id": 2}).json()["count"] == 0

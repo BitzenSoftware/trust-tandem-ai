@@ -392,7 +392,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
       const [schemaRes, planRes] = await Promise.all([
         apiFetch(`${API}/schema${wsParam}`, { headers: h }),
-        apiFetch(`${API}/plan`,   { headers: h }),
+        apiFetch(`${API}/plan${wsParam}`,   { headers: h }),
       ]);
       if (schemaRes.ok) { setSchema(await schemaRes.json()); setSchemaLoaded(true); }
       if (planRes.ok)   setPlanInfo(await planRes.json());

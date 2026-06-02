@@ -87,13 +87,13 @@ class PainelOrquestracao:
     def fila_revisao(self) -> list[dict]:
         return repository.get_queue(self.tenant_id)
 
-    def processar_registro(self, cliente: dict, schema: list[dict] | None = None) -> None:
+    def processar_registro(self, cliente: dict, schema: list[dict] | None = None, workspace_id: int | None = None) -> None:
         if schema is None:
-            schema = repository.get_tenant_schema(self.tenant_id)
+            schema = repository.get_tenant_schema(self.tenant_id, workspace_id)
 
         # name is always required
         if not cliente.get("name") or not str(cliente["name"]).strip():
-            repository.save_to_queue(cliente, self.tenant_id)
+            repository.save_to_queue(cliente, self.tenant_id, workspace_id)
             logger.warning("Registro sem nome válido enviado para Fila de Revisão Humana.")
             return
 
@@ -109,15 +109,15 @@ class PainelOrquestracao:
         )
 
         if all_valid:
-            self.resolver_direto(cliente)
+            self.resolver_direto(cliente, workspace_id)
         else:
-            repository.save_to_queue(cliente, self.tenant_id)
+            repository.save_to_queue(cliente, self.tenant_id, workspace_id)
             logger.warning("Registro de '%s' enviado para Fila de Revisão Humana.", cliente["name"])
 
-    def processar_lote(self, clientes: list[dict], schema: list[dict] | None = None) -> tuple[int, int]:
+    def processar_lote(self, clientes: list[dict], schema: list[dict] | None = None, workspace_id: int | None = None) -> tuple[int, int]:
         """Classify all records first, then bulk-insert — reduces N HTTP calls to 2."""
         if schema is None:
-            schema = repository.get_tenant_schema(self.tenant_id)
+            schema = repository.get_tenant_schema(self.tenant_id, workspace_id)
 
         valid_records: list[dict] = []
         invalid_records: list[dict] = []
@@ -149,22 +149,22 @@ class PainelOrquestracao:
                 invalid_records.append(cliente)
                 logger.warning("Registro de '%s' enviado para Fila de Revisão Humana.", cliente["name"])
 
-        repository.save_bulk(valid_records, self.tenant_id)
-        repository.save_to_queue_bulk(invalid_records, self.tenant_id)
+        repository.save_bulk(valid_records, self.tenant_id, workspace_id)
+        repository.save_to_queue_bulk(invalid_records, self.tenant_id, workspace_id)
 
         return len(valid_records), len(invalid_records)
 
     def remover_da_fila(self, name: str) -> int:
         return repository.remove_from_queue(name, self.tenant_id)
 
-    def resolver_direto(self, merged: dict) -> None:
+    def resolver_direto(self, merged: dict, workspace_id: int | None = None) -> None:
         """Saves real (unmasked) data to clean_records — masking applied at display time."""
         repository.save({
             "name":  merged["name"],
             "email": merged.get("email") or "",
             "cpf":   merged.get("cpf") or "",
             **{k: v for k, v in merged.items() if k not in ("name", "email", "cpf")},
-        }, self.tenant_id)
+        }, self.tenant_id, workspace_id)
 
     def limpar_tudo(self) -> None:
         repository.clear(self.tenant_id)

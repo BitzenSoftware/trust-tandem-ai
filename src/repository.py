@@ -145,35 +145,53 @@ def init_db() -> None:
                 UNIQUE(tenant_id, email)
             )
         """)
+        # Phase 2: add workspace_id columns (idempotent; ignore if already present)
+        for _col in [
+            "ALTER TABLE clean_records ADD COLUMN workspace_id INTEGER",
+            "ALTER TABLE review_queue ADD COLUMN workspace_id INTEGER",
+            "ALTER TABLE tenant_field_schemas ADD COLUMN workspace_id INTEGER",
+            "ALTER TABLE tenant_api_keys ADD COLUMN workspace_id INTEGER",
+            "ALTER TABLE tenant_webhooks ADD COLUMN workspace_id INTEGER",
+            "ALTER TABLE tenant_audit_logs ADD COLUMN workspace_id INTEGER",
+        ]:
+            try:
+                conn.execute(_col)
+            except Exception:
+                pass
 
 
 # --- clean_records ---
 
-def save(record: dict, tenant_id: str = "default") -> None:
+def save(record: dict, tenant_id: str = "default", workspace_id: int | None = None) -> None:
     legal_basis = record.get("legal_basis")
     extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
     if USE_SUPABASE:
+        body: dict = {"tenant_id": tenant_id, "name": record["name"], "email": record["email"],
+                      "cpf": record["cpf"], "extra_fields": extra or {}, "legal_basis": legal_basis}
+        if workspace_id is not None:
+            body["workspace_id"] = workspace_id
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/clean_records",
-            json={"tenant_id": tenant_id, "name": record["name"], "email": record["email"],
-                  "cpf": record["cpf"], "extra_fields": extra or {}, "legal_basis": legal_basis},
+            json=body,
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
         return
     with sqlite3.connect(_DB_PATH) as conn:
         conn.execute(
-            "INSERT INTO clean_records (tenant_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?)",
-            (tenant_id, record["name"], record["email"], record["cpf"], json.dumps(extra), legal_basis),
+            "INSERT INTO clean_records (tenant_id, name, email, cpf, extra_fields, legal_basis, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (tenant_id, record["name"], record["email"], record["cpf"], json.dumps(extra), legal_basis, workspace_id),
         )
 
 
-def count_clean_records(tenant_id: str = "default") -> int:
+def count_clean_records(tenant_id: str = "default", workspace_id: int | None = None) -> int:
     """Returns exact total count of clean records for a tenant — single HTTP call, no pagination."""
     if USE_SUPABASE:
+        params: dict = {"select": "id", "tenant_id": f"eq.{tenant_id}"}
+        params["workspace_id"] = f"eq.{workspace_id}" if workspace_id is not None else "is.null"
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/clean_records",
-            params={"select": "id", "tenant_id": f"eq.{tenant_id}"},
+            params=params,
             headers={**_HEADERS, "Prefer": "count=exact"},
             timeout=10,
         )
@@ -183,9 +201,14 @@ def count_clean_records(tenant_id: str = "default") -> int:
         return int(total) if total.lstrip("-").isdigit() else len(resp.json())
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM clean_records WHERE tenant_id = ?", (tenant_id,)
-            ).fetchone()
+            if workspace_id is not None:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM clean_records WHERE tenant_id = ? AND workspace_id = ?", (tenant_id, workspace_id)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM clean_records WHERE tenant_id = ? AND workspace_id IS NULL", (tenant_id,)
+                ).fetchone()
             return row[0] if row else 0
     return 0
 
@@ -208,7 +231,7 @@ def all_records(tenant_id: str = "default") -> list[dict]:
 
 
 def get_clean_records_paginated(
-    tenant_id: str, after_id: int | None = None, limit: int = 500
+    tenant_id: str, after_id: int | None = None, limit: int = 500, workspace_id: int | None = None
 ) -> tuple[list[dict], int | None]:
     """Cursor-based pagination for clean_records.
     Returns (records, next_cursor_id). next_cursor_id is None when no further pages exist."""
@@ -222,6 +245,7 @@ def get_clean_records_paginated(
             "tenant_id": f"eq.{tenant_id}",
             "limit": fetch,
         }
+        params["workspace_id"] = f"eq.{workspace_id}" if workspace_id is not None else "is.null"
         if after_id is not None:
             params["id"] = f"gt.{after_id}"
         resp = _http.get(
@@ -238,17 +262,19 @@ def get_clean_records_paginated(
     # SQLite fallback
     with sqlite3.connect(_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
+        ws_clause = "workspace_id = ?" if workspace_id is not None else "workspace_id IS NULL"
+        ws_args: tuple = (workspace_id,) if workspace_id is not None else ()
         if after_id is not None:
             rows = conn.execute(
-                "SELECT id, name, email, cpf FROM clean_records "
-                "WHERE tenant_id = ? AND id > ? ORDER BY id LIMIT ?",
-                (tenant_id, after_id, fetch),
+                f"SELECT id, name, email, cpf FROM clean_records "
+                f"WHERE tenant_id = ? AND {ws_clause} AND id > ? ORDER BY id LIMIT ?",
+                (tenant_id, *ws_args, after_id, fetch),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, name, email, cpf FROM clean_records "
-                "WHERE tenant_id = ? ORDER BY id LIMIT ?",
-                (tenant_id, fetch),
+                f"SELECT id, name, email, cpf FROM clean_records "
+                f"WHERE tenant_id = ? AND {ws_clause} ORDER BY id LIMIT ?",
+                (tenant_id, *ws_args, fetch),
             ).fetchall()
         rows = [dict(r) for r in rows]
         has_more = len(rows) > limit
@@ -318,23 +344,26 @@ def clear(tenant_id: str = "default") -> None:
 
 # --- review_queue ---
 
-def save_to_queue(record: dict, tenant_id: str = "default") -> None:
+def save_to_queue(record: dict, tenant_id: str = "default", workspace_id: int | None = None) -> None:
     legal_basis = record.get("legal_basis")
     extra = {k: v for k, v in record.items() if k not in ("name", "email", "cpf", "legal_basis")}
     if USE_SUPABASE:
+        body: dict = {"tenant_id": tenant_id, "name": record["name"], "email": record.get("email"),
+                      "cpf": record.get("cpf"), "extra_fields": extra or {}, "legal_basis": legal_basis,
+                      "status": "PENDING"}
+        if workspace_id is not None:
+            body["workspace_id"] = workspace_id
         resp = _http.post(
             f"{_SUPABASE_URL}/rest/v1/review_queue",
-            json={"tenant_id": tenant_id, "name": record["name"], "email": record.get("email"),
-                  "cpf": record.get("cpf"), "extra_fields": extra or {}, "legal_basis": legal_basis,
-                  "status": "PENDING"},
+            json=body,
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
         return
     with sqlite3.connect(_DB_PATH) as conn:
         conn.execute(
-            "INSERT INTO review_queue (tenant_id, name, email, cpf, extra_fields, legal_basis) VALUES (?, ?, ?, ?, ?, ?)",
-            (tenant_id, record["name"], record.get("email"), record.get("cpf"), json.dumps(extra), legal_basis),
+            "INSERT INTO review_queue (tenant_id, name, email, cpf, extra_fields, legal_basis, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (tenant_id, record["name"], record.get("email"), record.get("cpf"), json.dumps(extra), legal_basis, workspace_id),
         )
 
 
@@ -445,16 +474,19 @@ def get_queue(tenant_id: str = "default", status: str = "PENDING", workspace_id:
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
+        ws_clause = "workspace_id = ?" if workspace_id is not None else "workspace_id IS NULL"
+        ws_args: tuple = (workspace_id,) if workspace_id is not None else ()
         if status == "ALL":
             rows = conn.execute(
-                "SELECT name,email,cpf,extra_fields,legal_basis,status,operator_approved_by "
-                "FROM review_queue WHERE tenant_id=? ORDER BY id", (tenant_id,)
+                f"SELECT name,email,cpf,extra_fields,legal_basis,status,operator_approved_by "
+                f"FROM review_queue WHERE tenant_id=? AND {ws_clause} ORDER BY id",
+                (tenant_id, *ws_args),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT name,email,cpf,extra_fields,legal_basis,status,operator_approved_by "
-                "FROM review_queue WHERE tenant_id=? AND COALESCE(status,'PENDING')=? ORDER BY id",
-                (tenant_id, status),
+                f"SELECT name,email,cpf,extra_fields,legal_basis,status,operator_approved_by "
+                f"FROM review_queue WHERE tenant_id=? AND {ws_clause} AND COALESCE(status,'PENDING')=? ORDER BY id",
+                (tenant_id, *ws_args, status),
             ).fetchall()
         result = []
         for r in rows:
@@ -598,20 +630,24 @@ def create_audit_log(
     record_name: str,
     action: str,
     fields_affected: dict | None = None,
+    workspace_id: int | None = None,
 ) -> None:
     """Writes an immutable compliance event. Never raises — audit must not break the main flow."""
     payload = fields_affected or {}
     try:
         if USE_SUPABASE:
+            body: dict = {
+                "tenant_id": tenant_id,
+                "operator_email": operator_email,
+                "record_name": record_name,
+                "action": action,
+                "fields_affected": payload,
+            }
+            if workspace_id is not None:
+                body["workspace_id"] = workspace_id
             _http.post(
                 f"{_SUPABASE_URL}/rest/v1/tenant_audit_logs",
-                json={
-                    "tenant_id": tenant_id,
-                    "operator_email": operator_email,
-                    "record_name": record_name,
-                    "action": action,
-                    "fields_affected": payload,
-                },
+                json=body,
                 headers=_HEADERS, timeout=10,
             ).raise_for_status()
             return
@@ -625,28 +661,38 @@ def create_audit_log(
                     record_name TEXT NOT NULL,
                     action TEXT NOT NULL,
                     fields_affected TEXT,
+                    workspace_id INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            try:
+                conn.execute("ALTER TABLE tenant_audit_logs ADD COLUMN workspace_id INTEGER")
+            except Exception:
+                pass
             conn.execute(
-                "INSERT INTO tenant_audit_logs (tenant_id, operator_email, record_name, action, fields_affected)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (tenant_id, operator_email, record_name, action, json.dumps(payload)),
+                "INSERT INTO tenant_audit_logs (tenant_id, operator_email, record_name, action, fields_affected, workspace_id)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (tenant_id, operator_email, record_name, action, json.dumps(payload), workspace_id),
             )
     except Exception as exc:
         logger.warning("create_audit_log failed (non-fatal): %s", exc)
 
 
-def list_audit_logs(tenant_id: str, limit: int = 100) -> list[dict]:
+def list_audit_logs(tenant_id: str, limit: int = 100, workspace_id: int | None = None) -> list[dict]:
     if USE_SUPABASE:
+        params: dict = {
+            "select": "id,operator_email,record_name,action,fields_affected,created_at",
+            "tenant_id": f"eq.{tenant_id}",
+            "order": "created_at.desc",
+            "limit": limit,
+        }
+        if workspace_id is not None:
+            params["workspace_id"] = f"eq.{workspace_id}"
+        else:
+            params["workspace_id"] = "is.null"
         resp = _http.get(
             f"{_SUPABASE_URL}/rest/v1/tenant_audit_logs",
-            params={
-                "select": "id,operator_email,record_name,action,fields_affected,created_at",
-                "tenant_id": f"eq.{tenant_id}",
-                "order": "created_at.desc",
-                "limit": limit,
-            },
+            params=params,
             headers=_HEADERS, timeout=10,
         )
         resp.raise_for_status()
@@ -654,9 +700,15 @@ def list_audit_logs(tenant_id: str, limit: int = 100) -> list[dict]:
     if _DB_PATH.exists():
         with sqlite3.connect(_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
+            if workspace_id is not None:
+                return [dict(r) for r in conn.execute(
+                    "SELECT id, operator_email, record_name, action, fields_affected, created_at"
+                    " FROM tenant_audit_logs WHERE tenant_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (tenant_id, workspace_id, limit),
+                ).fetchall()]
             return [dict(r) for r in conn.execute(
                 "SELECT id, operator_email, record_name, action, fields_affected, created_at"
-                " FROM tenant_audit_logs WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?",
+                " FROM tenant_audit_logs WHERE tenant_id = ? AND workspace_id IS NULL ORDER BY created_at DESC LIMIT ?",
                 (tenant_id, limit),
             ).fetchall()]
     return []

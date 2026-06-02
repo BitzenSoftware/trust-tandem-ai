@@ -494,12 +494,14 @@ def _get_stripe_key() -> str:
 @_router.post("/ingest", response_model=RespostaIngestao, status_code=status.HTTP_202_ACCEPTED,
               summary="Ingere lote de clientes e separa anomalias para revisão humana",
               dependencies=[Depends(_rate_limit)])
-def ingerir_dados(clientes: list[ClienteInput], painel: PainelOrquestracao = Depends(_get_painel)):
+def ingerir_dados(clientes: list[ClienteInput], painel: PainelOrquestracao = Depends(_get_painel),
+                  workspace_id: int | None = Query(None)):
     if not clientes:
         raise HTTPException(status_code=400, detail="A lista de clientes não pode estar vazia.")
-    schema = repository.get_tenant_schema(painel.tenant_id)
+    _check_workspace_access(workspace_id, painel.tenant_id)
+    schema = repository.get_tenant_schema(painel.tenant_id, workspace_id)
     clean_count, queue_count = painel.processar_lote(
-        [c.model_dump() for c in clientes], schema=schema
+        [c.model_dump() for c in clientes], schema=schema, workspace_id=workspace_id
     )
     return RespostaIngestao(
         status="Processado",
@@ -511,7 +513,10 @@ def ingerir_dados(clientes: list[ClienteInput], painel: PainelOrquestracao = Dep
 
 @_router.get("/review-queue", response_model=list[RegistroRevisaoOut],
              summary="Lista registros aguardando intervenção humana")
-def listar_fila_revisao(painel: PainelOrquestracao = Depends(_get_painel)):
+def listar_fila_revisao(painel: PainelOrquestracao = Depends(_get_painel),
+                        workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, painel.tenant_id)
+    queue_items = repository.get_queue(painel.tenant_id, status="PENDING", workspace_id=workspace_id)
     return [
         RegistroRevisaoOut(
             name=item["name"],
@@ -519,7 +524,7 @@ def listar_fila_revisao(painel: PainelOrquestracao = Depends(_get_painel)):
             cpf_hint=_hint(str(item.get("cpf", ""))),
             legal_basis=item.get("legal_basis"),
         )
-        for item in painel.fila_revisao
+        for item in queue_items
     ]
 
 
@@ -533,8 +538,10 @@ class PendingApprovalItem(BaseModel):
 @_router.get("/pending-approval", response_model=list[PendingApprovalItem],
              summary="Lista pré-aprovados aguardando aprovação final do admin (Four-Eyes)",
              dependencies=[Depends(_require_admin)])
-def listar_pendentes_aprovacao(tenant_id: str = Depends(_get_tenant_id)):
-    items = repository.get_queue(tenant_id, status="OPERATOR_APPROVED")
+def listar_pendentes_aprovacao(tenant_id: str = Depends(_get_tenant_id),
+                               workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    items = repository.get_queue(tenant_id, status="OPERATOR_APPROVED", workspace_id=workspace_id)
     return [
         PendingApprovalItem(
             name=item["name"],
@@ -553,15 +560,17 @@ def admin_aprovar_registro(
     name: str,
     painel: PainelOrquestracao = Depends(_get_painel),
     operator_email: str = Depends(_get_operator_email),
+    workspace_id: int | None = Query(None),
 ):
+    _check_workspace_access(workspace_id, painel.tenant_id)
     record = repository.admin_finalize(painel.tenant_id, name, operator_email)
     if not record:
         raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado em aprovações pendentes.")
     before = len(painel.banco_limpo)
-    painel.resolver_direto(record)
+    painel.resolver_direto(record, workspace_id)
     after_records = painel.banco_limpo
     if len(after_records) > before:
-        wh = repository.get_webhook(painel.tenant_id)
+        wh = repository.get_webhook(painel.tenant_id, workspace_id)
         if wh and wh.get("active"):
             repository.fire_webhook(wh["url"], wh["secret"], after_records[-1:])
     repository.create_audit_log(
@@ -570,6 +579,7 @@ def admin_aprovar_registro(
         record_name=name,
         action="APPROVE_FINAL",
         fields_affected={"four_eyes_principle": True},
+        workspace_id=workspace_id,
     )
     return RespostaIngestao(
         status="Aprovado",
@@ -584,9 +594,11 @@ def visualizar_banco_seguro(
     painel: PainelOrquestracao = Depends(_get_painel),
     limit: int = Query(default=500, ge=1, le=1000, description="Registros por página (máx 1000)"),
     after_id: Optional[int] = Query(default=None, description="Cursor: ID do último registo recebido"),
+    workspace_id: int | None = Query(None),
 ):
+    _check_workspace_access(workspace_id, painel.tenant_id)
     from masking import mask_email, mask_cpf
-    records, next_cursor = repository.get_clean_records_paginated(painel.tenant_id, after_id, limit)
+    records, next_cursor = repository.get_clean_records_paginated(painel.tenant_id, after_id, limit, workspace_id)
     masked = [{"name": r["name"], "email": mask_email(r["email"]), "cpf": mask_cpf(r["cpf"])} for r in records]
     headers: dict[str, str] = {"X-Has-More": "true" if next_cursor is not None else "false"}
     if next_cursor is not None:
@@ -595,8 +607,10 @@ def visualizar_banco_seguro(
 
 
 @_router.get("/database/count", summary="Retorna contagem total de registros limpos do tenant")
-def contar_banco(painel: PainelOrquestracao = Depends(_get_painel)):
-    return {"count": repository.count_clean_records(painel.tenant_id)}
+def contar_banco(painel: PainelOrquestracao = Depends(_get_painel),
+                 workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, painel.tenant_id)
+    return {"count": repository.count_clean_records(painel.tenant_id, workspace_id)}
 
 
 @_router.get("/database/export", summary="Exporta dados limpos como CSV — suporta split em partes")
@@ -604,7 +618,9 @@ def exportar_csv(
     painel: PainelOrquestracao = Depends(_get_painel),
     limit: int = Query(default=10000, ge=100, le=50000, description="Registros por arquivo (100–50 000)"),
     after_id: Optional[int] = Query(default=None, description="Cursor: ID do último registro da parte anterior"),
+    workspace_id: int | None = Query(None),
 ):
+    _check_workspace_access(workspace_id, painel.tenant_id)
     import csv
     import io
     from datetime import date
@@ -620,7 +636,7 @@ def exportar_csv(
 
     while collected < limit:
         batch = min(BATCH, limit - collected)
-        page, nc = repository.get_clean_records_paginated(painel.tenant_id, cursor, batch)
+        page, nc = repository.get_clean_records_paginated(painel.tenant_id, cursor, batch, workspace_id)
         for row in page:
             writer.writerow({"name": row["name"], "email": row["email"], "cpf": row["cpf"]})
         collected += len(page)
@@ -648,7 +664,9 @@ def resolver_registro(
     painel: PainelOrquestracao = Depends(_get_painel),
     operator_email: str = Depends(_get_operator_email),
     role: str = Depends(_get_role),
+    workspace_id: int | None = Query(None),
 ):
+    _check_workspace_access(workspace_id, painel.tenant_id)
     before = len(painel.banco_limpo)
     original = next((r for r in painel.fila_revisao if r["name"] == cliente.name), {})
     merged = {
@@ -671,6 +689,7 @@ def resolver_registro(
             record_name=cliente.name,
             action="PREAPPROVE_MANUAL",
             fields_affected={"email_provided": cliente.email is not None, "cpf_provided": cliente.cpf is not None},
+            workspace_id=workspace_id,
         )
         return RespostaIngestao(
             status="Pré-aprovado",
@@ -681,10 +700,10 @@ def resolver_registro(
 
     # Admin path: direct resolve + webhook (bypasses Four-Eyes)
     painel.remover_da_fila(cliente.name)
-    painel.resolver_direto(merged)
+    painel.resolver_direto(merged, workspace_id)
     after_records = painel.banco_limpo
     if len(after_records) > before:
-        wh = repository.get_webhook(painel.tenant_id)
+        wh = repository.get_webhook(painel.tenant_id, workspace_id)
         if wh and wh.get("active"):
             repository.fire_webhook(wh["url"], wh["secret"], after_records[-1:])
     original_legal_basis = original.get("legal_basis") or cliente.legal_basis
@@ -698,6 +717,7 @@ def resolver_registro(
             "cpf_provided": cliente.cpf is not None,
             **({"legal_basis": original_legal_basis} if original_legal_basis else {}),
         },
+        workspace_id=workspace_id,
     )
     return RespostaIngestao(
         status="Resolvido",
@@ -714,9 +734,11 @@ def bulk_resolver(
     painel: PainelOrquestracao = Depends(_get_painel),
     operator_email: str = Depends(_get_operator_email),
     role: str = Depends(_get_role),
+    workspace_id: int | None = Query(None),
 ):
+    _check_workspace_access(workspace_id, painel.tenant_id)
     queue_index = {r["name"]: r for r in painel.fila_revisao}
-    wh = repository.get_webhook(painel.tenant_id)
+    wh = repository.get_webhook(painel.tenant_id, workspace_id)
     approved = skipped = errors = webhooks_fired = 0
     details: list[BulkResolveDetail] = []
     approved_records: list[dict] = []
@@ -761,11 +783,12 @@ def bulk_resolver(
                 record_name=item.name,
                 action="PREAPPROVE_BULK",
                 fields_affected={"email_provided": item.email is not None, "cpf_provided": item.cpf is not None},
+                workspace_id=workspace_id,
             )
         else:
             # Admin direct path: resolver_direto + webhook
             painel.remover_da_fila(item.name)
-            painel.resolver_direto(merged)
+            painel.resolver_direto(merged, workspace_id)
             approved += 1
             from masking import mask_email, mask_cpf
             approved_records.append({
@@ -788,6 +811,7 @@ def bulk_resolver(
                     "cpf_provided": item.cpf is not None,
                     **({"legal_basis": item_legal_basis} if item_legal_basis else {}),
                 },
+                workspace_id=workspace_id,
             )
 
     if approved_records and wh and wh.get("active"):
@@ -803,49 +827,59 @@ def bulk_resolver(
 @_router.post("/keys", response_model=ApiKeyOut, status_code=status.HTTP_201_CREATED,
               summary="Gera nova API Key para este tenant",
               dependencies=[Depends(_require_admin)])
-def criar_api_key(body: ApiKeyCreate, tenant_id: str = Depends(_get_tenant_id)):
+def criar_api_key(body: ApiKeyCreate, tenant_id: str = Depends(_get_tenant_id),
+                  workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
     # Super admin has unlimited API keys
     if tenant_id != "__admin__":
         plan = repository.get_tenant_plan(tenant_id)
         limits = repository.get_plan_limits(plan, tenant_id)
         max_keys = limits.get("api_keys_limit", 1)
         if max_keys < 999:
-            current_count = len(repository.list_api_keys(tenant_id))
+            current_count = len(repository.list_api_keys(tenant_id, workspace_id))
             if current_count >= max_keys:
                 raise HTTPException(
                     status_code=403,
                     detail=f"Limite de {max_keys} API Key(s) atingido para o plano {plan.capitalize()}. Faça upgrade para adicionar mais.",
                 )
-    plain, key_id, created_at = repository.create_api_key(tenant_id, body.label)
+    plain, key_id, created_at = repository.create_api_key(tenant_id, body.label, workspace_id)
     return ApiKeyOut(id=key_id, label=body.label, created_at=str(created_at), key=plain)
 
 
 @_router.get("/keys", response_model=list[ApiKeyOut],
              summary="Lista API Keys do tenant")
-def listar_api_keys(tenant_id: str = Depends(_get_tenant_id)):
-    return [ApiKeyOut(**{**k, "key": None}) for k in repository.list_api_keys(tenant_id)]
+def listar_api_keys(tenant_id: str = Depends(_get_tenant_id),
+                    workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    return [ApiKeyOut(**{**k, "key": None}) for k in repository.list_api_keys(tenant_id, workspace_id)]
 
 
 @_router.delete("/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT,
                 summary="Revoga uma API Key",
                 dependencies=[Depends(_require_admin)])
-def revogar_api_key(key_id: int, tenant_id: str = Depends(_get_tenant_id)):
-    if not repository.revoke_api_key(key_id, tenant_id):
+def revogar_api_key(key_id: int, tenant_id: str = Depends(_get_tenant_id),
+                    workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    if not repository.revoke_api_key(key_id, tenant_id, workspace_id):
         raise HTTPException(status_code=404, detail="API Key não encontrada.")
 
 
 @_router.post("/webhook", response_model=WebhookOut,
               summary="Configura webhook de saída (upsert)",
               dependencies=[Depends(_require_admin)])
-def configurar_webhook(body: WebhookIn, tenant_id: str = Depends(_get_tenant_id)):
-    secret = repository.save_webhook(tenant_id, body.url)
+def configurar_webhook(body: WebhookIn, tenant_id: str = Depends(_get_tenant_id),
+                       workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    secret = repository.save_webhook(tenant_id, body.url, workspace_id)
     return WebhookOut(url=body.url, secret=secret, active=True)
 
 
 @_router.get("/webhook", response_model=WebhookOut,
              summary="Obtém configuração de webhook do tenant")
-def obter_webhook(tenant_id: str = Depends(_get_tenant_id)):
-    wh = repository.get_webhook(tenant_id)
+def obter_webhook(tenant_id: str = Depends(_get_tenant_id),
+                  workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    wh = repository.get_webhook(tenant_id, workspace_id)
     if not wh:
         raise HTTPException(status_code=404, detail="Nenhum webhook configurado.")
     masked = "***" + wh["secret"][-6:]
@@ -855,8 +889,10 @@ def obter_webhook(tenant_id: str = Depends(_get_tenant_id)):
 @_router.delete("/webhook", status_code=status.HTTP_204_NO_CONTENT,
                 summary="Remove webhook do tenant",
                 dependencies=[Depends(_require_admin)])
-def remover_webhook(tenant_id: str = Depends(_get_tenant_id)):
-    repository.delete_webhook(tenant_id)
+def remover_webhook(tenant_id: str = Depends(_get_tenant_id),
+                    workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    repository.delete_webhook(tenant_id, workspace_id)
 
 
 def _build_diagnosis_prompt(schema: list[dict]) -> str:
@@ -883,12 +919,14 @@ def _build_diagnosis_prompt(schema: list[dict]) -> str:
 
 @_router.get("/analyze/{name}", summary="Diagnóstico estruturado Claude para um registro da fila",
              dependencies=[Depends(_rate_limit)])
-def analisar_registro(name: str, painel: PainelOrquestracao = Depends(_get_painel)):
+def analisar_registro(name: str, painel: PainelOrquestracao = Depends(_get_painel),
+                      workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, painel.tenant_id)
     record = next((r for r in painel.fila_revisao if r["name"] == name), None)
     if not record:
         raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado na fila.")
 
-    schema = repository.get_tenant_schema(painel.tenant_id)
+    schema = repository.get_tenant_schema(painel.tenant_id, workspace_id)
     extra = record.get("extra_fields") or {}
 
     def _field_value(f: dict) -> str:
@@ -935,7 +973,9 @@ def expurgar_registro(
     name: str,
     painel: PainelOrquestracao = Depends(_get_painel),
     operator_email: str = Depends(_get_operator_email),
+    workspace_id: int | None = Query(None),
 ):
+    _check_workspace_access(workspace_id, painel.tenant_id)
     deleted = painel.remover_da_fila(name)
     if deleted == 0:
         raise HTTPException(status_code=404, detail=f"Registro '{name}' não encontrado na fila.")
@@ -945,6 +985,7 @@ def expurgar_registro(
         record_name=name,
         action="EXPURGO",
         fields_affected={},
+        workspace_id=workspace_id,
     )
 
 
@@ -966,13 +1007,17 @@ def purgar_expirados(days: int = 30, tenant_id: str = Depends(_get_tenant_id)):
 
 
 @_router.get("/audit-logs", summary="Logs de auditoria e compliance do tenant (ANPD)")
-def listar_audit_logs(limit: int = 100, tenant_id: str = Depends(_get_tenant_id)):
-    return repository.list_audit_logs(tenant_id=tenant_id, limit=min(limit, 500))
+def listar_audit_logs(limit: int = 100, tenant_id: str = Depends(_get_tenant_id),
+                      workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    return repository.list_audit_logs(tenant_id=tenant_id, limit=min(limit, 500), workspace_id=workspace_id)
 
 
 @_router.get("/schema", summary="Retorna o schema de campos do tenant")
-def obter_schema(tenant_id: str = Depends(_get_tenant_id)):
-    return repository.get_tenant_schema(tenant_id)
+def obter_schema(tenant_id: str = Depends(_get_tenant_id),
+                 workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    return repository.get_tenant_schema(tenant_id, workspace_id)
 
 
 @_router.get("/admin/profile", summary="Retorna perfil e papel do utilizador autenticado")
@@ -1037,27 +1082,31 @@ def deletar_secret(key_name: str):
 
 
 @_router.get("/plan", summary="Retorna o plano e limite de campos do tenant")
-def obter_plano(tenant_id: str = Depends(_get_tenant_id)):
+def obter_plano(tenant_id: str = Depends(_get_tenant_id),
+                workspace_id: int | None = Query(None)):
     plan = repository.get_tenant_plan(tenant_id)
     limit = repository.get_plan_field_limit(plan, tenant_id)
-    count = repository.count_field_schemas(tenant_id)
+    count = repository.count_field_schemas(tenant_id, workspace_id)
     return {"plan": plan, "field_limit": limit, "field_count": count}
 
 
 @_router.post("/schema/fields", status_code=status.HTTP_201_CREATED,
               summary="Adiciona ou actualiza um campo no schema do tenant",
               dependencies=[Depends(_require_admin)])
-def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
+def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id),
+                 workspace_id: int | None = Query(None)):
     if body.field_key == "name":
         raise HTTPException(status_code=400, detail="O campo 'name' é reservado e não pode ser configurado.")
+    # Phase 2: Verify workspace access
+    _check_workspace_access(workspace_id, tenant_id)
     # Only new fields count against the plan limit — updates are always allowed
     # Super admin has unlimited fields
-    current_schema = repository.get_tenant_schema(tenant_id)
+    current_schema = repository.get_tenant_schema(tenant_id, workspace_id)
     existing_keys = {f["field_key"] for f in current_schema}
     if body.field_key not in existing_keys and tenant_id != "__admin__":
         plan = repository.get_tenant_plan(tenant_id)
         limit = repository.get_plan_field_limit(plan, tenant_id)
-        count = repository.count_field_schemas(tenant_id)
+        count = repository.count_field_schemas(tenant_id, workspace_id)
         if count >= limit:
             raise HTTPException(
                 status_code=403,
@@ -1071,8 +1120,8 @@ def salvar_campo(body: FieldSchemaIn, tenant_id: str = Depends(_get_tenant_id)):
         "position":         body.position,
         "validation_rules": body.validation_rules or {},
         "is_sensitive":     body.is_sensitive,
-    })
-    return repository.get_tenant_schema(tenant_id)
+    }, workspace_id)
+    return repository.get_tenant_schema(tenant_id, workspace_id)
 
 
 @_router.get("/plans", summary="Retorna configuração pública de planos (preços e limites)")
@@ -1220,8 +1269,10 @@ def deletar_enterprise_client(client_tenant_id: str):
 @_router.delete("/schema/fields/{field_key}", status_code=status.HTTP_204_NO_CONTENT,
                 summary="Remove um campo do schema do tenant",
                 dependencies=[Depends(_require_admin)])
-def remover_campo(field_key: str, tenant_id: str = Depends(_get_tenant_id)):
-    deleted = repository.delete_field_schema(tenant_id, field_key)
+def remover_campo(field_key: str, tenant_id: str = Depends(_get_tenant_id),
+                  workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    deleted = repository.delete_field_schema(tenant_id, field_key, workspace_id)
     if deleted == 0:
         raise HTTPException(status_code=404, detail=f"Campo '{field_key}' não encontrado.")
 
