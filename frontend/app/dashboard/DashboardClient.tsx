@@ -268,7 +268,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
         if (wsRes.ok) {
           const ws = await wsRes.json();
           setWorkspaces(ws);
-          if (ws.length > 0) setActiveWorkspace((prev: number | null) => prev ?? ws[0].id);
+          // Default workspace = Principal (null = legacy/default data). Do NOT auto-select a real workspace id.
         }
       } catch { /* non-fatal */ }
       finally { setWorkspacesLoaded(true); }
@@ -1319,8 +1319,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                   setActiveWorkspace(wsId);
                 }}
                 style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", fontSize: "0.84rem", fontWeight: 600, cursor: "pointer" }}>
+                {/* Principal === workspace_id NULL (legacy + default data). Real "Principal" row is hidden to avoid duplicates. */}
                 <option value="">Principal</option>
-                {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+                {workspaces.filter(ws => ws.name !== "Principal").map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
               </select>
             )}
           </div>
