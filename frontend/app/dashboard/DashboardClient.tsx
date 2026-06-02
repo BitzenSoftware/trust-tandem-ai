@@ -268,7 +268,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
         if (wsRes.ok) {
           const ws = await wsRes.json();
           setWorkspaces(ws);
-          // Default workspace = Principal (null = legacy/default data). Do NOT auto-select a real workspace id.
+          // Every record is tagged with a real workspace_id. Default to the Principal workspace (real id).
+          const principal = ws.find((w: { name: string }) => w.name === "Principal") ?? ws[0];
+          if (principal) setActiveWorkspace((prev: number | null) => prev ?? principal.id);
         }
       } catch { /* non-fatal */ }
       finally { setWorkspacesLoaded(true); }
@@ -488,8 +490,10 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     try {
       const res = await apiFetch(`${API}/workspaces`, { headers: h });
       if (res.ok) {
-        setWorkspaces(await res.json());
-        // Do NOT auto-select a real workspace id — Principal (null) is the default.
+        const ws = await res.json();
+        setWorkspaces(ws);
+        const principal = ws.find((w: { name: string }) => w.name === "Principal") ?? ws[0];
+        if (principal) setActiveWorkspace((prev: number | null) => prev ?? principal.id);
       }
     } catch { /* ignore */ }
     finally { setWorkspacesLoaded(true); }
@@ -1318,9 +1322,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                   setActiveWorkspace(wsId);
                 }}
                 style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", fontSize: "0.84rem", fontWeight: 600, cursor: "pointer" }}>
-                {/* Principal === workspace_id NULL (legacy + default data). Real "Principal" row is hidden to avoid duplicates. */}
-                <option value="">Principal</option>
-                {workspaces.filter(ws => ws.name !== "Principal").map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+                {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
               </select>
             )}
           </div>
@@ -1879,13 +1881,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
               <label style={{ fontSize: "0.84rem", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap" }}>Área (workspace):</label>
               <select
                 value={activeWorkspace ?? ""}
-                onChange={e => {
-                  const val = e.target.value;
-                  setActiveWorkspace(val === "" ? null : Number(val));
-                }}
+                onChange={e => setActiveWorkspace(Number(e.target.value))}
                 style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--accent)", backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", fontSize: "0.88rem", fontWeight: 600, cursor: "pointer", flex: 1 }}>
-                <option value="">Principal</option>
-                {workspaces.filter(w => w.name !== "Principal").map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+                {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
               </select>
             </div>
             <div style={s.settingsCard}>
@@ -2433,7 +2431,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                     {addUserTab === "area" && (
                       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginBottom: 8 }}>Seleccione a área (workspace) a que este utilizador pertence.</p>
-                        {[{ id: null, name: "Principal" }, ...workspaces.filter(w => w.name !== "Principal")].map(ws => (
+                        {workspaces.map(ws => (
                           <label key={ws.id ?? "principal"} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
                             borderRadius: 10, border: `1px solid ${addUserWorkspace === ws.id ? "var(--accent)" : "var(--border)"}`,
                             backgroundColor: addUserWorkspace === ws.id ? "var(--accent-subtle)" : "var(--bg-surface-2)", cursor: "pointer" }}>
@@ -2530,7 +2528,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                     {addUserTab === "area" && (
                       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginBottom: 4 }}>Seleccione a área (workspace) deste utilizador.</p>
-                        {[{ id: null, name: "Principal" }, ...workspaces.filter(w => w.name !== "Principal")].map(ws => (
+                        {workspaces.map(ws => (
                           <label key={ws.id ?? "principal"} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
                             borderRadius: 10, border: `1px solid ${editUserWorkspace === ws.id ? "var(--accent)" : "var(--border)"}`,
                             backgroundColor: editUserWorkspace === ws.id ? "var(--accent-subtle)" : "var(--bg-surface-2)", cursor: "pointer" }}>
