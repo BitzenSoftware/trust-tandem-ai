@@ -863,7 +863,7 @@ def save_webhook(tenant_id: str, url: str, workspace_id: int | None = None) -> s
             f"{_SUPABASE_URL}/rest/v1/tenant_webhooks",
             json=payload,
             headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
-            params={"on_conflict": "tenant_id"}, timeout=10,
+            params={"on_conflict": "tenant_id,workspace_id"}, timeout=10,
         )
         resp.raise_for_status()
         return secret
@@ -1013,7 +1013,7 @@ def upsert_field_schema(tenant_id: str, field: dict, workspace_id: int | None = 
             f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
             json=row,
             headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
-            params={"on_conflict": "tenant_id,field_key"}, timeout=10,
+            params={"on_conflict": "tenant_id,field_key,workspace_id"}, timeout=10,
         ).raise_for_status()
         return
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
