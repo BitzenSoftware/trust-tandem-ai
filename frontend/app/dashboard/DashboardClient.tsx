@@ -286,8 +286,10 @@ export default function DashboardClient({ token: _token, userName }: { token: st
 
   // Re-fetch tab-specific data when workspace changes (without re-doing the 55s warm-up)
   useEffect(() => {
+    // Always invalidate schema so any tab that needs it (Schema, Ingestão) refetches for the new workspace
+    setSchema([]); setSchemaLoaded(false);
     if (tab === "settings") fetchSettings();
-    if (tab === "schema") { setSchema([]); setSchemaLoaded(false); fetchSchema(); }
+    if (tab === "schema" || tab === "ingest") fetchSchema();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWorkspace]);
 
