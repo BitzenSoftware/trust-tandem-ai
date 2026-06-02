@@ -856,16 +856,27 @@ def revoke_api_key(key_id: int, tenant_id: str, workspace_id: int | None = None)
 def save_webhook(tenant_id: str, url: str, workspace_id: int | None = None) -> str:
     secret = secrets.token_hex(32)
     if USE_SUPABASE:
+        wh_url = f"{_SUPABASE_URL}/rest/v1/tenant_webhooks"
         payload = {"tenant_id": tenant_id, "url": url, "secret": secret, "active": True}
         if workspace_id is not None:
             payload["workspace_id"] = workspace_id
-        resp = _http.post(
-            f"{_SUPABASE_URL}/rest/v1/tenant_webhooks",
-            json=payload,
-            headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
-            params={"on_conflict": "tenant_id,workspace_id"}, timeout=10,
-        )
-        resp.raise_for_status()
+        # Manual upsert scoped to (tenant, workspace) — robust to constraint shape
+        match = {
+            "tenant_id": f"eq.{tenant_id}",
+            "workspace_id": f"eq.{workspace_id}" if workspace_id is not None else "is.null",
+        }
+        existing = _http.get(wh_url, params={**match, "select": "id"}, headers=_HEADERS, timeout=10)
+        existing.raise_for_status()
+        if existing.json():
+            _http.patch(
+                wh_url, json={"url": url, "secret": secret, "active": True}, params=match,
+                headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10,
+            ).raise_for_status()
+        else:
+            _http.post(
+                wh_url, json=payload,
+                headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10,
+            ).raise_for_status()
         return secret
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(_DB_PATH) as conn:
@@ -1006,15 +1017,29 @@ def get_tenant_schema(tenant_id: str, workspace_id: int | None = None) -> list[d
 
 def upsert_field_schema(tenant_id: str, field: dict, workspace_id: int | None = None) -> None:
     if USE_SUPABASE:
+        url = f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas"
         row = {"tenant_id": tenant_id, **field, "is_sensitive": bool(field.get("is_sensitive", False))}
         if workspace_id is not None:
             row["workspace_id"] = workspace_id
-        _http.post(
-            f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas",
-            json=row,
-            headers={**_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
-            params={"on_conflict": "tenant_id,field_key,workspace_id"}, timeout=10,
-        ).raise_for_status()
+        # Manual upsert scoped to (tenant, field_key, workspace) — robust to constraint shape
+        match = {
+            "tenant_id": f"eq.{tenant_id}",
+            "field_key": f"eq.{field['field_key']}",
+            "workspace_id": f"eq.{workspace_id}" if workspace_id is not None else "is.null",
+        }
+        existing = _http.get(url, params={**match, "select": "id"}, headers=_HEADERS, timeout=10)
+        existing.raise_for_status()
+        if existing.json():
+            upd = {k: v for k, v in row.items() if k not in ("tenant_id", "field_key", "workspace_id")}
+            _http.patch(
+                url, json=upd, params=match,
+                headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10,
+            ).raise_for_status()
+        else:
+            _http.post(
+                url, json=row,
+                headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10,
+            ).raise_for_status()
         return
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(_DB_PATH) as conn:
