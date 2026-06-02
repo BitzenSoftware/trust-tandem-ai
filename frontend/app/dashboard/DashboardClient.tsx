@@ -488,13 +488,12 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     try {
       const res = await apiFetch(`${API}/workspaces`, { headers: h });
       if (res.ok) {
-        const ws = await res.json();
-        setWorkspaces(ws);
-        if (ws.length > 0 && !activeWorkspace) setActiveWorkspace(ws[0].id);
+        setWorkspaces(await res.json());
+        // Do NOT auto-select a real workspace id — Principal (null) is the default.
       }
     } catch { /* ignore */ }
     finally { setWorkspacesLoaded(true); }
-  }, [activeWorkspace]);
+  }, []);
 
 
 
@@ -1875,23 +1874,10 @@ export default function DashboardClient({ token: _token, userName }: { token: st
         ) : tab === "schema" ? (
           /* ── SCHEMA EDITOR ── */
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {/* Phase 2: Workspace selector for schema */}
-            {workspacesLoaded && workspaces.length > 0 && (
-              <div style={{ ...s.card, display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
-                <label style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap" }}>Workspace:</label>
-                <select
-                  value={activeWorkspace ?? ""}
-                  onChange={e => {
-                    const wsId = Number(e.target.value);
-                    setActiveWorkspace(wsId);
-                    setSchema([]);
-                    setSchemaLoaded(false);
-                  }}
-                  style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", flex: 1 }}>
-                  {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
-                </select>
-              </div>
-            )}
+            {/* Workspace is controlled by the header selector (single source of truth) */}
+            <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+              A editar o schema da área: <strong style={{ color: "var(--text-primary)" }}>{activeWorkspace ? (workspaces.find(w => w.id === activeWorkspace)?.name ?? "—") : "Principal"}</strong>
+            </p>
             <div style={s.settingsCard}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 4 }}>
                 <p style={{ ...s.settingsTitle, marginBottom: 0 }}>{t.schema.title}</p>
