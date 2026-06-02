@@ -1595,7 +1595,18 @@ def criar_workspace(body: WorkspaceIn, tenant_id: str = Depends(_get_tenant_id))
                 status_code=403,
                 detail=f"Limite de espaços de trabalho atingido ({current_count}/{limit}). Faça upgrade para adicionar mais.",
             )
-    return repository.create_workspace(tenant_id, body.name, body.description)
+    ws = repository.create_workspace(tenant_id, body.name, body.description)
+    # Auto-provision a default AI agent for the new workspace
+    try:
+        new_id = ws.get("id") if isinstance(ws, dict) else None
+        if new_id is not None:
+            repository.upsert_agent_settings(
+                tenant_id, new_id,
+                system_prompt="", model=MODEL, temperature=0.3, enabled=True,
+            )
+    except Exception:
+        pass  # agent provisioning is non-fatal
+    return ws
 
 
 @_router.get("/workspaces/{workspace_id}/members", summary="Lista membros de um workspace")
