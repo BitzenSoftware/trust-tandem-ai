@@ -1874,10 +1874,20 @@ export default function DashboardClient({ token: _token, userName }: { token: st
         ) : tab === "schema" ? (
           /* ── SCHEMA EDITOR ── */
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {/* Workspace is controlled by the header selector (single source of truth) */}
-            <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-              A editar o schema da área: <strong style={{ color: "var(--text-primary)" }}>{activeWorkspace ? (workspaces.find(w => w.id === activeWorkspace)?.name ?? "—") : "Principal"}</strong>
-            </p>
+            {/* Workspace selector — controls which area the schema is saved to (Principal = null) */}
+            <div style={{ ...s.card, display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
+              <label style={{ fontSize: "0.84rem", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap" }}>Área (workspace):</label>
+              <select
+                value={activeWorkspace ?? ""}
+                onChange={e => {
+                  const val = e.target.value;
+                  setActiveWorkspace(val === "" ? null : Number(val));
+                }}
+                style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--accent)", backgroundColor: "var(--bg-surface-2)", color: "var(--text-primary)", fontSize: "0.88rem", fontWeight: 600, cursor: "pointer", flex: 1 }}>
+                <option value="">Principal</option>
+                {workspaces.filter(w => w.name !== "Principal").map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+              </select>
+            </div>
             <div style={s.settingsCard}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 4 }}>
                 <p style={{ ...s.settingsTitle, marginBottom: 0 }}>{t.schema.title}</p>
