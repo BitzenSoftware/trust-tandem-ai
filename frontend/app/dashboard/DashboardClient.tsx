@@ -76,7 +76,11 @@ function MoonIcon() {
 export default function DashboardClient({ token: _token, userName }: { token: string; userName: string }) {
   const router = useRouter();
   const { t } = useTranslation();
-  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "schema" | "audit" | "admin" | "subscription" | "users">("dashboard");
+  const [tab,       setTab]       = useState<"dashboard" | "queue" | "ingest" | "settings" | "schema" | "audit" | "admin" | "subscription" | "users" | "agent">("dashboard");
+  // AI Agent chat
+  const [agentMessages, setAgentMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [agentInput,    setAgentInput]    = useState("");
+  const [agentLoading,  setAgentLoading]  = useState(false);
   const [db,        setDb]        = useState<CleanRecord[]>([]);
   const [queue,     setQueue]     = useState<QueueItem[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -426,6 +430,33 @@ export default function DashboardClient({ token: _token, userName }: { token: st
       }
     } catch { /* ignore */ }
     finally { setSchemaLoading(false); }
+  }
+
+  async function handleSendAgentMessage() {
+    const text = agentInput.trim();
+    if (!text || agentLoading) return;
+    const next = [...agentMessages, { role: "user" as const, content: text }];
+    setAgentMessages(next);
+    setAgentInput("");
+    setAgentLoading(true);
+    const h = await getFreshHeaders();
+    if (!h) { setAgentLoading(false); return; }
+    try {
+      const wsParam = activeWorkspace ? `?workspace_id=${activeWorkspace}` : "";
+      const res = await apiFetch(`${API}/chat/agent${wsParam}`, {
+        method: "POST", headers: h,
+        body: JSON.stringify({ messages: next.map(m => ({ role: m.role, content: m.content })) }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAgentMessages(prev => [...prev, { role: "assistant", content: data.reply || "(sem resposta)" }]);
+      } else {
+        const b = await res.json().catch(() => ({}));
+        setAgentMessages(prev => [...prev, { role: "assistant", content: `⚠️ Erro ${res.status}: ${b.detail || "falha"}` }]);
+      }
+    } catch {
+      setAgentMessages(prev => [...prev, { role: "assistant", content: "⚠️ Erro de ligação." }]);
+    } finally { setAgentLoading(false); }
   }
 
   async function handleDeleteField(field_key: string) {
@@ -1384,6 +1415,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                 👥 Utilizadores
               </button>
             )}
+            <button onClick={() => setTab("agent")} style={tab === "agent" ? s.tabActive : s.tabInactive}>
+              🤖 Agente IA
+            </button>
             {isSuperAdmin && (
               <button onClick={() => { setTab("admin" as never); if (!adminLoaded) fetchAdminData(); }} style={(tab as string) === "admin" ? s.tabActive : s.tabInactive}>
                 {t.admin.tab}
@@ -2595,6 +2629,75 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                 </div>
               </div>
             )}
+          </div>
+
+        ) : tab === "agent" ? (
+          /* ── AGENTE IA (chat com skills) ── */
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ ...s.card, padding: "14px 18px" }}>
+              <h2 style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 2 }}>🤖 Agente IA</h2>
+              <p style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                Área: <strong>{activeWorkspace ? (workspaces.find(w => w.id === activeWorkspace)?.name ?? "—") : "Principal"}</strong>
+                {" · "}O agente consulta apenas os dados desta área.
+              </p>
+            </div>
+
+            <div style={{ ...s.card, padding: 0, display: "flex", flexDirection: "column", height: 520 }}>
+              {/* Mensagens */}
+              <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+                {agentMessages.length === 0 && (
+                  <div style={{ color: "var(--text-muted)", fontSize: "0.84rem", textAlign: "center" as const, margin: "auto", maxWidth: 380 }}>
+                    Pergunte algo sobre esta área — ex: <em>&quot;quantos registos limpos temos?&quot;</em>, <em>&quot;quantos estão na fila de revisão?&quot;</em>, <em>&quot;quais os campos do schema?&quot;</em>
+                  </div>
+                )}
+                {agentMessages.map((m, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                    <div style={{
+                      maxWidth: "78%", padding: "10px 14px", borderRadius: 14, fontSize: "0.86rem", lineHeight: 1.5,
+                      whiteSpace: "pre-wrap" as const, wordBreak: "break-word" as const,
+                      backgroundColor: m.role === "user" ? "var(--accent)" : "var(--bg-surface-2)",
+                      color: m.role === "user" ? "#fff" : "var(--text-primary)",
+                      border: m.role === "user" ? "none" : "1px solid var(--border)",
+                    }}>
+                      {m.content}
+                    </div>
+                  </div>
+                ))}
+                {agentLoading && (
+                  <div style={{ display: "flex", justifyContent: "flex-start" }}>
+                    <div style={{ padding: "10px 14px", borderRadius: 14, fontSize: "0.86rem", backgroundColor: "var(--bg-surface-2)", color: "var(--text-muted)", border: "1px solid var(--border)" }}>
+                      A pensar…
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Input */}
+              <div style={{ borderTop: "1px solid var(--border)", padding: "12px 14px", display: "flex", gap: 8 }}>
+                <input
+                  type="text"
+                  value={agentInput}
+                  onChange={e => setAgentInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendAgentMessage(); } }}
+                  placeholder="Escreva a sua pergunta…"
+                  disabled={agentLoading}
+                  style={{ ...s.ingestInput, flex: 1 }}
+                />
+                <button
+                  onClick={handleSendAgentMessage}
+                  disabled={agentLoading || !agentInput.trim()}
+                  style={{ ...s.ingestBtn, padding: "10px 22px", opacity: agentLoading || !agentInput.trim() ? 0.6 : 1 }}>
+                  Enviar
+                </button>
+                {agentMessages.length > 0 && (
+                  <button
+                    onClick={() => setAgentMessages([])}
+                    style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid var(--border)", background: "none", color: "var(--text-secondary)", fontSize: "0.84rem", cursor: "pointer" }}>
+                    Limpar
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
         ) : tab === "admin" ? (
