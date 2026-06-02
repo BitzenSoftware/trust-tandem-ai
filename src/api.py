@@ -476,6 +476,29 @@ class WorkspaceMemberIn(BaseModel):
     role: str = "operator"
 
 
+class AgentSettingsIn(BaseModel):
+    system_prompt: str = ""
+    model: str = "claude-sonnet-4-6"
+    temperature: float = 0.3
+    enabled: bool = True
+
+
+class AgentSkillIn(BaseModel):
+    name: str
+    description: str = ""
+    input_schema: dict = {}
+    enabled: bool = True
+
+
+class ChatMessage(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+
+class ChatAgentIn(BaseModel):
+    messages: list[ChatMessage]
+
+
 def _get_stripe_key() -> str:
     """Returns Stripe secret key from env var or encrypted vault."""
     key = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -1625,6 +1648,187 @@ def eliminar_workspace(workspace_id: int, tenant_id: str = Depends(_get_tenant_i
     deleted = repository.delete_workspace(tenant_id, workspace_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Workspace não encontrado.")
+
+
+# ── AI AGENT (Chat with Skills / Function Calling) ──────────────────────────
+# Built-in skills are SERVER-SIDE handlers, always scoped to (tenant_id, workspace_id),
+# so the agent can only ever read data from the active area — isolation is enforced
+# in the handler, never trusted from the model input.
+
+BUILTIN_SKILLS: dict[str, dict] = {
+    "contar_registros_limpos": {
+        "description": "Conta quantos registos limpos (aprovados) existem nesta área de trabalho.",
+        "input_schema": {"type": "object", "properties": {}},
+        "handler": lambda tid, wid, **kw: {
+            "total": repository.count_clean_records(tid, wid)
+        },
+    },
+    "contar_fila_revisao": {
+        "description": "Conta quantos registos estão pendentes na fila de revisão humana desta área.",
+        "input_schema": {"type": "object", "properties": {}},
+        "handler": lambda tid, wid, **kw: {
+            "pendentes": len(repository.get_queue(tid, status="PENDING", workspace_id=wid))
+        },
+    },
+    "listar_campos_schema": {
+        "description": "Lista os campos configurados no schema desta área (chave, rótulo, tipo, obrigatório).",
+        "input_schema": {"type": "object", "properties": {}},
+        "handler": lambda tid, wid, **kw: {
+            "campos": [
+                {"field_key": f["field_key"], "label": f.get("label"),
+                 "tipo": f.get("field_type"), "obrigatorio": bool(f.get("required"))}
+                for f in repository.get_tenant_schema(tid, wid)
+            ]
+        },
+    },
+    "procurar_na_fila": {
+        "description": "Procura registos na fila de revisão desta área cujo nome contém o termo indicado.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"termo": {"type": "string", "description": "Texto a procurar no nome do registo"}},
+            "required": ["termo"],
+        },
+        "handler": lambda tid, wid, termo="", **kw: {
+            "encontrados": [
+                {"name": r["name"]}
+                for r in repository.get_queue(tid, status="PENDING", workspace_id=wid)
+                if termo.lower() in str(r.get("name", "")).lower()
+            ][:25]
+        },
+    },
+}
+
+
+def _agent_tools(tenant_id: str, workspace_id: int | None) -> list[dict]:
+    """Build the Anthropic tools array from the workspace's enabled skills.
+    Falls back to all built-in skills when the workspace has none configured."""
+    configured = repository.list_agent_skills(tenant_id, workspace_id, enabled_only=True)
+    names = [s["name"] for s in configured if s["name"] in BUILTIN_SKILLS]
+    if not names:
+        names = list(BUILTIN_SKILLS.keys())  # sensible default: expose all
+    desc_override = {s["name"]: s.get("description") for s in configured}
+    tools = []
+    for n in names:
+        spec = BUILTIN_SKILLS[n]
+        tools.append({
+            "name": n,
+            "description": desc_override.get(n) or spec["description"],
+            "input_schema": spec["input_schema"],
+        })
+    return tools
+
+
+@_router.get("/agent/settings", summary="Configuração do agente IA da área")
+def obter_agent_settings(tenant_id: str = Depends(_get_tenant_id),
+                         workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    return repository.get_agent_settings(tenant_id, workspace_id)
+
+
+@_router.put("/agent/settings", summary="Actualiza configuração do agente IA da área",
+             dependencies=[Depends(_require_admin)])
+def guardar_agent_settings(body: AgentSettingsIn, tenant_id: str = Depends(_get_tenant_id),
+                           workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    repository.upsert_agent_settings(tenant_id, workspace_id, body.system_prompt,
+                                     body.model, body.temperature, body.enabled)
+    return repository.get_agent_settings(tenant_id, workspace_id)
+
+
+@_router.get("/agent/skills", summary="Lista skills do agente (catálogo + estado por área)")
+def listar_agent_skills(tenant_id: str = Depends(_get_tenant_id),
+                        workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    configured = {s["name"]: s for s in repository.list_agent_skills(tenant_id, workspace_id)}
+    # Merge the built-in catalogue with the workspace's saved state
+    out = []
+    for name, spec in BUILTIN_SKILLS.items():
+        saved = configured.get(name)
+        out.append({
+            "name": name,
+            "description": (saved or {}).get("description") or spec["description"],
+            "input_schema": spec["input_schema"],
+            "enabled": bool(saved["enabled"]) if saved else True,
+            "builtin": True,
+        })
+    return out
+
+
+@_router.post("/agent/skills", status_code=status.HTTP_201_CREATED,
+              summary="Activa/configura uma skill na área", dependencies=[Depends(_require_admin)])
+def guardar_agent_skill(body: AgentSkillIn, tenant_id: str = Depends(_get_tenant_id),
+                        workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    repository.upsert_agent_skill(tenant_id, workspace_id, body.model_dump())
+    return {"status": "saved", "name": body.name}
+
+
+@_router.delete("/agent/skills/{name}", status_code=status.HTTP_204_NO_CONTENT,
+                summary="Remove configuração de uma skill", dependencies=[Depends(_require_admin)])
+def remover_agent_skill(name: str, tenant_id: str = Depends(_get_tenant_id),
+                        workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    repository.delete_agent_skill(tenant_id, workspace_id, name)
+
+
+@_router.post("/chat/agent", summary="Chat com o agente IA (function calling, isolado por área)",
+              dependencies=[Depends(_rate_limit)])
+def chat_agent(body: ChatAgentIn, tenant_id: str = Depends(_get_tenant_id),
+               workspace_id: int | None = Query(None)):
+    _check_workspace_access(workspace_id, tenant_id)
+    if not body.messages:
+        raise HTTPException(status_code=400, detail="A conversa não pode estar vazia.")
+
+    settings = repository.get_agent_settings(tenant_id, workspace_id)
+    if not settings.get("enabled", True):
+        raise HTTPException(status_code=403, detail="O agente IA está desactivado nesta área.")
+
+    tools = _agent_tools(tenant_id, workspace_id)
+    system = settings.get("system_prompt") or (
+        "Você é um assistente de governança de dados (LGPD). Responda em português, "
+        "de forma objectiva. Use as ferramentas disponíveis para consultar os dados "
+        "desta área de trabalho sempre que precisar de números ou factos concretos."
+    )
+    model = settings.get("model") or MODEL
+    temperature = float(settings.get("temperature", 0.3))
+
+    messages: list[dict] = [{"role": m.role, "content": m.content} for m in body.messages]
+    tool_calls: list[dict] = []
+
+    try:
+        for _ in range(6):  # bounded agentic loop
+            resp = _claude.messages.create(
+                model=model, max_tokens=1024, system=system,
+                temperature=temperature, tools=tools, messages=messages,
+            )
+            if resp.stop_reason != "tool_use":
+                text = "".join(b.text for b in resp.content if b.type == "text")
+                return {"reply": text, "tool_calls": tool_calls}
+
+            # Execute every requested tool, scoped to this tenant+workspace
+            messages.append({"role": "assistant", "content": [b.model_dump() for b in resp.content]})
+            results = []
+            for block in resp.content:
+                if block.type != "tool_use":
+                    continue
+                spec = BUILTIN_SKILLS.get(block.name)
+                if spec is None:
+                    output = {"error": f"Skill '{block.name}' não disponível."}
+                else:
+                    try:
+                        output = spec["handler"](tenant_id, workspace_id, **(block.input or {}))
+                    except Exception as exc:  # noqa: BLE001
+                        output = {"error": str(exc)}
+                tool_calls.append({"skill": block.name, "input": block.input, "output": output})
+                results.append({
+                    "type": "tool_result", "tool_use_id": block.id,
+                    "content": json.dumps(output, ensure_ascii=False),
+                })
+            messages.append({"role": "user", "content": results})
+
+        return {"reply": "Limite de passos do agente atingido.", "tool_calls": tool_calls}
+    except anthropic.APIError as exc:
+        raise HTTPException(status_code=502, detail=f"Erro na API da Anthropic: {exc}")
 
 
 app.include_router(_router)

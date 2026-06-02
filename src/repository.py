@@ -158,6 +158,34 @@ def init_db() -> None:
                 conn.execute(_col)
             except Exception:
                 pass
+        # Phase 3: AI Agent (chat with skills / function calling) — workspace-isolated
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_settings (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id     TEXT NOT NULL,
+                workspace_id  INTEGER,
+                system_prompt TEXT DEFAULT '',
+                model         TEXT DEFAULT 'claude-sonnet-4-6',
+                temperature   REAL DEFAULT 0.3,
+                enabled       INTEGER DEFAULT 1,
+                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(tenant_id, workspace_id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_skills (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id    TEXT NOT NULL,
+                workspace_id INTEGER,
+                name         TEXT NOT NULL,
+                description  TEXT DEFAULT '',
+                input_schema TEXT DEFAULT '{}',
+                enabled      INTEGER DEFAULT 1,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(tenant_id, workspace_id, name)
+            )
+        """)
 
 
 # --- clean_records ---
@@ -1766,6 +1794,159 @@ def delete_enterprise_config(tenant_id: str) -> int:
     )
     resp.raise_for_status()
     return len(resp.json())
+
+
+# --- AI Agent: settings + skills (workspace-isolated) ---
+
+_AGENT_DEFAULTS = {
+    "system_prompt": "",
+    "model": "claude-sonnet-4-6",
+    "temperature": 0.3,
+    "enabled": True,
+}
+
+
+def _ws_param(workspace_id: int | None) -> str:
+    return f"eq.{workspace_id}" if workspace_id is not None else "is.null"
+
+
+def get_agent_settings(tenant_id: str, workspace_id: int | None = None) -> dict:
+    """Returns agent config for a workspace, falling back to defaults."""
+    if USE_SUPABASE:
+        resp = _http.get(
+            f"{_SUPABASE_URL}/rest/v1/agent_settings",
+            params={"select": "system_prompt,model,temperature,enabled",
+                    "tenant_id": f"eq.{tenant_id}", "workspace_id": _ws_param(workspace_id)},
+            headers=_HEADERS, timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0] if rows else dict(_AGENT_DEFAULTS)
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            clause = "workspace_id = ?" if workspace_id is not None else "workspace_id IS NULL"
+            args: tuple = (tenant_id, workspace_id) if workspace_id is not None else (tenant_id,)
+            row = conn.execute(
+                f"SELECT system_prompt, model, temperature, enabled FROM agent_settings "
+                f"WHERE tenant_id = ? AND {clause}", args,
+            ).fetchone()
+            if row:
+                d = dict(row); d["enabled"] = bool(d["enabled"]); return d
+    return dict(_AGENT_DEFAULTS)
+
+
+def upsert_agent_settings(tenant_id: str, workspace_id: int | None, system_prompt: str,
+                          model: str, temperature: float, enabled: bool) -> None:
+    if USE_SUPABASE:
+        url = f"{_SUPABASE_URL}/rest/v1/agent_settings"
+        body = {"tenant_id": tenant_id, "system_prompt": system_prompt, "model": model,
+                "temperature": temperature, "enabled": enabled,
+                "updated_at": datetime.now(timezone.utc).isoformat()}
+        if workspace_id is not None:
+            body["workspace_id"] = workspace_id
+        match = {"tenant_id": f"eq.{tenant_id}", "workspace_id": _ws_param(workspace_id)}
+        existing = _http.get(url, params={**match, "select": "id"}, headers=_HEADERS, timeout=10)
+        existing.raise_for_status()
+        if existing.json():
+            upd = {k: v for k, v in body.items() if k not in ("tenant_id",)}
+            _http.patch(url, json=upd, params=match, headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10).raise_for_status()
+        else:
+            _http.post(url, json=body, headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10).raise_for_status()
+        return
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO agent_settings (tenant_id, workspace_id, system_prompt, model, temperature, enabled)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(tenant_id, workspace_id) DO UPDATE SET"
+            " system_prompt=excluded.system_prompt, model=excluded.model,"
+            " temperature=excluded.temperature, enabled=excluded.enabled,"
+            " updated_at=CURRENT_TIMESTAMP",
+            (tenant_id, workspace_id, system_prompt, model, temperature, 1 if enabled else 0),
+        )
+
+
+def list_agent_skills(tenant_id: str, workspace_id: int | None = None, enabled_only: bool = False) -> list[dict]:
+    if USE_SUPABASE:
+        params: dict = {"select": "name,description,input_schema,enabled",
+                        "tenant_id": f"eq.{tenant_id}", "workspace_id": _ws_param(workspace_id),
+                        "order": "name.asc"}
+        if enabled_only:
+            params["enabled"] = "eq.true"
+        resp = _http.get(f"{_SUPABASE_URL}/rest/v1/agent_skills", params=params, headers=_HEADERS, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            clause = "workspace_id = ?" if workspace_id is not None else "workspace_id IS NULL"
+            args: list = [tenant_id] + ([workspace_id] if workspace_id is not None else [])
+            sql = f"SELECT name, description, input_schema, enabled FROM agent_skills WHERE tenant_id = ? AND {clause}"
+            if enabled_only:
+                sql += " AND enabled = 1"
+            sql += " ORDER BY name"
+            out = []
+            for r in conn.execute(sql, args).fetchall():
+                d = dict(r)
+                try:
+                    d["input_schema"] = json.loads(d.get("input_schema") or "{}")
+                except Exception:
+                    d["input_schema"] = {}
+                d["enabled"] = bool(d["enabled"])
+                out.append(d)
+            return out
+    return []
+
+
+def upsert_agent_skill(tenant_id: str, workspace_id: int | None, skill: dict) -> None:
+    schema_json = skill.get("input_schema") or {}
+    if USE_SUPABASE:
+        url = f"{_SUPABASE_URL}/rest/v1/agent_skills"
+        body = {"tenant_id": tenant_id, "name": skill["name"],
+                "description": skill.get("description", ""), "input_schema": schema_json,
+                "enabled": skill.get("enabled", True)}
+        if workspace_id is not None:
+            body["workspace_id"] = workspace_id
+        match = {"tenant_id": f"eq.{tenant_id}", "workspace_id": _ws_param(workspace_id),
+                 "name": f"eq.{skill['name']}"}
+        existing = _http.get(url, params={**match, "select": "id"}, headers=_HEADERS, timeout=10)
+        existing.raise_for_status()
+        if existing.json():
+            upd = {k: v for k, v in body.items() if k not in ("tenant_id", "name", "workspace_id")}
+            _http.patch(url, json=upd, params=match, headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10).raise_for_status()
+        else:
+            _http.post(url, json=body, headers={**_HEADERS, "Prefer": "return=minimal"}, timeout=10).raise_for_status()
+        return
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO agent_skills (tenant_id, workspace_id, name, description, input_schema, enabled)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(tenant_id, workspace_id, name) DO UPDATE SET"
+            " description=excluded.description, input_schema=excluded.input_schema, enabled=excluded.enabled",
+            (tenant_id, workspace_id, skill["name"], skill.get("description", ""),
+             json.dumps(schema_json), 1 if skill.get("enabled", True) else 0),
+        )
+
+
+def delete_agent_skill(tenant_id: str, workspace_id: int | None, name: str) -> int:
+    if USE_SUPABASE:
+        resp = _http.delete(
+            f"{_SUPABASE_URL}/rest/v1/agent_skills",
+            params={"tenant_id": f"eq.{tenant_id}", "workspace_id": _ws_param(workspace_id), "name": f"eq.{name}"},
+            headers={**_HEADERS, "Prefer": "return=representation"}, timeout=10,
+        )
+        resp.raise_for_status()
+        return len(resp.json())
+    if _DB_PATH.exists():
+        with sqlite3.connect(_DB_PATH) as conn:
+            clause = "workspace_id = ?" if workspace_id is not None else "workspace_id IS NULL"
+            args: list = [tenant_id] + ([workspace_id] if workspace_id is not None else []) + [name]
+            return conn.execute(
+                f"DELETE FROM agent_skills WHERE tenant_id = ? AND {clause} AND name = ?", args
+            ).rowcount
+    return 0
 
 
 def list_enterprise_configs() -> list[dict]:
