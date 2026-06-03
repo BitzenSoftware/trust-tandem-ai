@@ -13,26 +13,32 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import anthropic
 import requests as _req
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import repository
 from app_orquestrador import PainelOrquestracao, _hint
 
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
 
+_startup_logger = __import__("logging").getLogger("uvicorn.error")
+
 _SUPABASE_URL      = os.environ.get("SUPABASE_URL",      "https://szmxignwhckydwjmrwxs.supabase.co")
-_SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "sb_publishable_jA1KNrUNIWuwSKcK3bT1JQ_DzfmYS3B")
+# Nunca embutir credenciais no código. Deve vir sempre da variável de ambiente.
+_SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+if not _SUPABASE_ANON_KEY:
+    _startup_logger.warning(
+        "SUPABASE_ANON_KEY não está configurada — a autenticação via Supabase irá falhar. "
+        "Defina a variável de ambiente SUPABASE_ANON_KEY."
+    )
 _API_KEY           = os.environ.get("API_GATEWAY_KEY", "")
 _bearer      = HTTPBearer(auto_error=False)
 _key_scheme  = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-_startup_logger = __import__("logging").getLogger("uvicorn.error")
 if not _API_KEY:
     _startup_logger.warning(
         "SEGURANÇA: API_GATEWAY_KEY não configurada — modo dev ativo."
@@ -105,9 +111,7 @@ def _get_tenant_id(
             return "default"
         raise HTTPException(status_code=401, detail="API Key inválida.")
 
-    if not _API_KEY:
-        return "default"
-
+    # Sem bypass: a API exige sempre um JWT válido ou uma API Key válida.
     raise HTTPException(status_code=401, detail="Autenticação necessária.")
 
 
@@ -291,8 +295,12 @@ def _check_workspace_access(
     if workspace_id is None:
         return workspace_id
 
-    # TODO: Verificar se o user tem acesso ao workspace específico via workspace_members
-    # Por enquanto, só protegido na Etapa 3 da Fase 2 — implementar quando necessário
+    # Verifica que o workspace pertence ao tenant autenticado (isolamento entre tenants).
+    ws = repository.get_workspace_by_id(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace não encontrado.")
+    if str(ws.get("tenant_id")) != str(tenant_id):
+        raise HTTPException(status_code=403, detail="Sem acesso a este workspace.")
     return workspace_id
 
 
@@ -304,12 +312,24 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# CORS: origens explícitas. allow_origins=["*"] é incompatível com allow_credentials=True
+# (proibido pelo padrão CORS) e exporia a API a qualquer domínio.
+_DEFAULT_ORIGINS = [
+    "https://trust-tandem-ai.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+]
+_ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
+] or _DEFAULT_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
 
 
@@ -383,6 +403,37 @@ class ApiKeyOut(BaseModel):
 
 class WebhookIn(BaseModel):
     url: str
+
+    @field_validator("url")
+    @classmethod
+    def _validate_webhook_url(cls, v: str) -> str:
+        """Bloqueia SSRF: apenas http/https para hosts públicos (sem IPs privados/internos)."""
+        import ipaddress
+        import socket
+        from urllib.parse import urlparse
+
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("URL de webhook deve usar http ou https.")
+        host = parsed.hostname
+        if not host:
+            raise ValueError("URL de webhook inválida.")
+
+        blocked_hosts = {"localhost", "metadata.google.internal"}
+        if host.lower() in blocked_hosts:
+            raise ValueError("URL de webhook aponta para um host interno não permitido.")
+
+        # Resolve o host e rejeita qualquer endereço privado/loopback/link-local/reservado.
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            raise ValueError("Não foi possível resolver o host do webhook.")
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+                raise ValueError("URL de webhook não pode apontar para endereços internos/privados.")
+        return v
 
 
 class WebhookOut(BaseModel):
@@ -491,12 +542,13 @@ class AgentSkillIn(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    role: str  # "user" | "assistant"
-    content: str
+    # role restrito: impede injeção de mensagens "system" ou outros valores inesperados.
+    role: Literal["user", "assistant"]
+    content: str = Field(..., max_length=32_768)  # 32 KB por mensagem
 
 
 class ChatAgentIn(BaseModel):
-    messages: list[ChatMessage]
+    messages: list[ChatMessage] = Field(..., max_length=50)
 
 
 def _get_stripe_key() -> str:
@@ -636,7 +688,8 @@ def contar_banco(painel: PainelOrquestracao = Depends(_get_painel),
     return {"count": repository.count_clean_records(painel.tenant_id, workspace_id)}
 
 
-@_router.get("/database/export", summary="Exporta dados limpos como CSV — suporta split em partes")
+@_router.get("/database/export", summary="Exporta dados limpos como CSV — suporta split em partes",
+             dependencies=[Depends(_require_admin)])
 def exportar_csv(
     painel: PainelOrquestracao = Depends(_get_painel),
     limit: int = Query(default=10000, ge=100, le=50000, description="Registros por arquivo (100–50 000)"),
@@ -1611,34 +1664,38 @@ def criar_workspace(body: WorkspaceIn, tenant_id: str = Depends(_get_tenant_id))
 
 @_router.get("/workspaces/{workspace_id}/members", summary="Lista membros de um workspace")
 def listar_membros_workspace(workspace_id: int, tenant_id: str = Depends(_get_tenant_id)):
-    # TODO: Verificar que o tenant tem acesso a este workspace
+    _check_workspace_access(workspace_id, tenant_id)
     return repository.get_workspace_members(workspace_id)
 
 
 @_router.post("/workspaces/{workspace_id}/members", status_code=status.HTTP_201_CREATED,
-              summary="Convida um utilizador para um workspace")
+              summary="Convida um utilizador para um workspace",
+              dependencies=[Depends(_require_admin)])
 def convidar_membro_workspace(workspace_id: int, body: WorkspaceMemberIn,
                               tenant_id: str = Depends(_get_tenant_id),
                               user_id: str = Depends(_get_user_id)):
-    # TODO: Verificar que o user_id é admin do workspace
+    _check_workspace_access(workspace_id, tenant_id)
     if body.role not in ["admin", "operator", "viewer"]:
         raise HTTPException(status_code=400, detail="Role inválida (admin/operator/viewer).")
     return repository.add_workspace_member(workspace_id, tenant_id, body.email, body.role, user_id)
 
 
-@_router.patch("/workspaces/{workspace_id}/members/{email}", summary="Actualiza role de um membro")
+@_router.patch("/workspaces/{workspace_id}/members/{email}", summary="Actualiza role de um membro",
+               dependencies=[Depends(_require_admin)])
 def actualizar_role_membro(workspace_id: int, email: str, role: str,
                            tenant_id: str = Depends(_get_tenant_id)):
-    # TODO: Verificar que o utilizador é admin do workspace
+    _check_workspace_access(workspace_id, tenant_id)
     if role not in ["admin", "operator", "viewer"]:
         raise HTTPException(status_code=400, detail="Role inválida (admin/operator/viewer).")
     repository.update_workspace_member_role(workspace_id, email, role)
     return {"status": "updated"}
 
 
-@_router.delete("/workspaces/{workspace_id}/members/{email}", summary="Remove um membro de um workspace")
+@_router.delete("/workspaces/{workspace_id}/members/{email}", summary="Remove um membro de um workspace",
+                dependencies=[Depends(_require_admin)])
 def remover_membro_workspace(workspace_id: int, email: str,
                              tenant_id: str = Depends(_get_tenant_id)):
+    _check_workspace_access(workspace_id, tenant_id)
     repository.remove_workspace_member(workspace_id, email)
     return {"status": "removed"}
 
