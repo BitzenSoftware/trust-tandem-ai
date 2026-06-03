@@ -12,7 +12,7 @@ type CleanRecord    = { name: string; email: string; cpf: string };
 type QueueItem      = { name: string; email_hint: string; cpf_hint: string; legal_basis?: string | null };
 type AuditLogEntry  = { id: number; operator_email: string; record_name: string; action: string; fields_affected: string | Record<string, unknown>; created_at: string };
 type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown>; is_sensitive: boolean };
-type PlanInfo       = { plan: string; field_limit: number; field_count: number };
+type PlanInfo       = { plan: string; field_limit: number; field_count: number; workspaces_limit?: number; workspaces_count?: number };
 type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; workspaces_limit: number };
 type EnterpriseConfig  = { tenant_id: string; stripe_price_id: string; amount_display: number; currency_display: string };
 type TenantOption      = { tenant_id: string; company_name: string | null; plan: string; subscription_status: string | null };
@@ -519,12 +519,24 @@ export default function DashboardClient({ token: _token, userName }: { token: st
     const h = await getFreshHeaders();
     if (!h) return;
     try {
-      const res = await apiFetch(`${API}/workspaces`, { headers: h });
+      const [res, planRes] = await Promise.all([
+        apiFetch(`${API}/workspaces`, { headers: h }),
+        apiFetch(`${API}/plan`,       { headers: h }),
+      ]);
       if (res.ok) {
         const ws = await res.json();
         setWorkspaces(ws);
         const principal = ws.find((w: { name: string }) => w.name === "Principal") ?? ws[0];
         if (principal) setActiveWorkspace((prev: number | null) => prev ?? principal.id);
+      }
+      // Carrega limite/contagem de workspaces para o contador da aba Workspaces.
+      // Merge: só actualiza os campos de workspace, preservando field_count
+      // (que é por workspace e definido pela aba schema com workspace_id).
+      if (planRes.ok) {
+        const p: PlanInfo = await planRes.json();
+        setPlanInfo(prev => prev
+          ? { ...prev, plan: p.plan, workspaces_limit: p.workspaces_limit, workspaces_count: p.workspaces_count }
+          : p);
       }
     } catch { /* ignore */ }
     finally { setWorkspacesLoaded(true); }
@@ -3019,7 +3031,7 @@ export default function DashboardClient({ token: _token, userName }: { token: st
             {/* Sub-tabs */}
             <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)" }}>
               {([["integracoes", "Integrações"], ["workspaces", "Workspaces"]] as const).map(([key, label]) => (
-                <button key={key} onClick={() => setSettingsTab(key)}
+                <button key={key} onClick={() => { setSettingsTab(key); if (key === "workspaces") fetchWorkspaces(); }}
                   style={{ padding: "10px 20px", background: "none", border: "none", cursor: "pointer",
                     fontSize: "0.88rem", fontWeight: 600,
                     color: settingsTab === key ? "var(--accent)" : "var(--text-muted)",
@@ -3119,12 +3131,33 @@ export default function DashboardClient({ token: _token, userName }: { token: st
 
             {settingsTab === "workspaces" && (
               <div style={s.settingsCard}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, gap: 12 }}>
                   <div>
                     <p style={s.settingsTitle}>Espaços de Trabalho</p>
                     <p style={s.settingsDesc}>Organize os dados por áreas distintas dentro do tenant.</p>
                   </div>
+                  {/* Bloco B — contador X/Y (exclui o Principal, consistente com o backend) */}
+                  {planInfo && planInfo.workspaces_limit != null && (
+                    <span style={{ fontSize: "0.72rem", fontWeight: 700,
+                      color: workspaces.filter(ws => ws.name !== "Principal").length >= planInfo.workspaces_limit ? "var(--error-text, #b91c1c)" : "var(--text-muted)",
+                      backgroundColor: workspaces.filter(ws => ws.name !== "Principal").length >= planInfo.workspaces_limit ? "var(--error-subtle, #fee2e2)" : "var(--bg-surface-2)",
+                      padding: "3px 10px", borderRadius: 20, border: "1px solid var(--border)", whiteSpace: "nowrap" }}>
+                      {workspaces.filter(ws => ws.name !== "Principal").length} / {planInfo.workspaces_limit} workspaces · {planInfo.plan.charAt(0).toUpperCase() + planInfo.plan.slice(1)}
+                    </span>
+                  )}
                 </div>
+
+                {/* Bloco D — banner de limite atingido + CTA de upgrade */}
+                {planInfo && planInfo.workspaces_limit != null && workspaces.filter(ws => ws.name !== "Principal").length >= planInfo.workspaces_limit && (
+                  <div style={{ backgroundColor: "var(--error-subtle, #fee2e2)", border: "1px solid var(--error, #ef4444)", borderRadius: 8, padding: "10px 14px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: "0.82rem", color: "var(--error-text, #b91c1c)" }}>
+                      Limite de workspaces do plano {planInfo.plan.charAt(0).toUpperCase() + planInfo.plan.slice(1)} atingido ({workspaces.filter(ws => ws.name !== "Principal").length}/{planInfo.workspaces_limit}). Faça upgrade para criar mais espaços de trabalho.
+                    </span>
+                    <button onClick={() => setTab("subscription")} style={{ ...s.ingestBtn, fontSize: "0.78rem", whiteSpace: "nowrap" }}>
+                      Fazer upgrade
+                    </button>
+                  </div>
+                )}
 
                 {/* Criar novo workspace */}
                 <div style={{ marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid var(--border)" }}>
@@ -3167,9 +3200,9 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                         } catch (e) { setWsError("Erro de conexão."); }
                         finally { setWsSaving(false); }
                       }}
-                      disabled={wsSaving || !newWsName.trim()}
-                      style={{ ...s.ingestBtn, alignSelf: "flex-start", opacity: wsSaving || !newWsName.trim() ? 0.6 : 1 }}>
-                      {wsSaving ? "A criar..." : "Criar Workspace"}
+                      disabled={wsSaving || !newWsName.trim() || (planInfo?.workspaces_limit != null && workspaces.filter(ws => ws.name !== "Principal").length >= planInfo.workspaces_limit)}
+                      style={{ ...s.ingestBtn, alignSelf: "flex-start", opacity: wsSaving || !newWsName.trim() || (planInfo?.workspaces_limit != null && workspaces.filter(ws => ws.name !== "Principal").length >= planInfo.workspaces_limit) ? 0.6 : 1 }}>
+                      {wsSaving ? "A criar..." : (planInfo?.workspaces_limit != null && workspaces.filter(ws => ws.name !== "Principal").length >= planInfo.workspaces_limit ? "Limite atingido" : "Criar Workspace")}
                     </button>
                   </div>
                   {wsError && <p style={{ fontSize: "0.78rem", color: "var(--danger, #dc2626)", marginTop: 8 }}>{wsError}</p>}

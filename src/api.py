@@ -1157,13 +1157,24 @@ def deletar_secret(key_name: str):
         raise HTTPException(status_code=404, detail=f"Chave '{key_name}' não encontrada.")
 
 
-@_router.get("/plan", summary="Retorna o plano e limite de campos do tenant")
+@_router.get("/plan", summary="Retorna o plano, limite de campos e limite de workspaces do tenant")
 def obter_plano(tenant_id: str = Depends(_get_tenant_id),
                 workspace_id: int | None = Query(None)):
     plan = repository.get_tenant_plan(tenant_id)
     limit = repository.get_plan_field_limit(plan, tenant_id)
     count = repository.count_field_schemas(tenant_id, workspace_id)
-    return {"plan": plan, "field_limit": limit, "field_count": count}
+    # Limite e contagem de workspaces — exclui o "Principal" da contagem,
+    # consistente com a aplicação do limite em criar_workspace.
+    ws_limit = repository.get_workspaces_limit(plan, tenant_id)
+    all_workspaces = repository.get_workspaces(tenant_id)
+    ws_count = len([w for w in all_workspaces if w.get("name") != "Principal"])
+    return {
+        "plan": plan,
+        "field_limit": limit,
+        "field_count": count,
+        "workspaces_limit": ws_limit,
+        "workspaces_count": ws_count,
+    }
 
 
 @_router.post("/schema/fields", status_code=status.HTTP_201_CREATED,
