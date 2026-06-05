@@ -11,7 +11,7 @@ const API = process.env.NEXT_PUBLIC_API_URL + "/api/v1";
 type CleanRecord    = { name: string; email: string; cpf: string };
 type QueueItem      = { name: string; email_hint: string; cpf_hint: string; legal_basis?: string | null };
 type AuditLogEntry  = { id: number; operator_email: string; record_name: string; action: string; fields_affected: string | Record<string, unknown>; created_at: string };
-type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown>; is_sensitive: boolean };
+type FieldSchema    = { field_key: string; label: string; field_type: string; required: boolean; position: number; validation_rules: Record<string, unknown>; is_sensitive: boolean; updated_at?: string };
 type PlanInfo       = { plan: string; field_limit: number; field_count: number; workspaces_limit?: number; workspaces_count?: number };
 type PlanConfig    = { plan_name: string; field_limit: number; price_monthly: number; stripe_price_id: string | null; records_per_month: number; api_keys_limit: number; diagnoses_per_month: number; workspaces_limit: number };
 type EnterpriseConfig  = { tenant_id: string; stripe_price_id: string; amount_display: number; currency_display: string };
@@ -1973,7 +1973,10 @@ export default function DashboardClient({ token: _token, userName }: { token: st
                         {f.field_key} <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>— {f.label}</span>
                         {f.is_sensitive && <span style={{ marginLeft: 8, fontSize: "0.68rem", fontWeight: 600, color: "#b91c1c", background: "#fee2e2", borderRadius: 4, padding: "1px 6px" }}>🔒 Sensível</span>}
                       </p>
-                      <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{f.field_type} · {f.required ? t.schema.required : "opcional"} · {t.schema.position}: {f.position}</p>
+                      <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                        {f.field_type} · {f.required ? t.schema.required : "opcional"} · {t.schema.position}: {f.position}
+                        {f.updated_at && <> · atualizado: {new Date(f.updated_at).toLocaleString("pt-PT", { dateStyle: "short", timeStyle: "short" })}</>}
+                      </p>
                     </div>
                     <button onClick={() => handleDeleteField(f.field_key)} style={s.revokeBtn}>{t.schema.deleteField}</button>
                   </div>
