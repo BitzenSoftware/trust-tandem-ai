@@ -97,11 +97,18 @@ def init_db() -> None:
                 validation_rules TEXT DEFAULT '{}',
                 is_sensitive     INTEGER DEFAULT 0,
                 created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(tenant_id, field_key)
             )
         """)
         try:
             conn.execute("ALTER TABLE tenant_field_schemas ADD COLUMN is_sensitive INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            # SQLite não permite DEFAULT CURRENT_TIMESTAMP em ALTER ADD COLUMN;
+            # tabelas pré-existentes ganham a coluna sem default (NULL até ao 1º update).
+            conn.execute("ALTER TABLE tenant_field_schemas ADD COLUMN updated_at TIMESTAMP")
         except Exception:
             pass
         conn.execute("""
@@ -996,7 +1003,7 @@ def _merge_with_defaults(custom_rows: list[dict]) -> list[dict]:
 
 def get_tenant_schema(tenant_id: str, workspace_id: int | None = None) -> list[dict]:
     if USE_SUPABASE:
-        params: dict = {"select": "field_key,label,field_type,required,position,validation_rules,is_sensitive",
+        params: dict = {"select": "field_key,label,field_type,required,position,validation_rules,is_sensitive,updated_at",
                         "tenant_id": f"eq.{tenant_id}", "order": "position.asc"}
         if workspace_id is not None:
             params["workspace_id"] = f"eq.{workspace_id}"
@@ -1018,14 +1025,14 @@ def get_tenant_schema(tenant_id: str, workspace_id: int | None = None) -> list[d
             if workspace_id is not None:
                 rows = conn.execute(
                     "SELECT field_key, label, field_type, required, position, validation_rules,"
-                    " COALESCE(is_sensitive, 0) as is_sensitive"
+                    " COALESCE(is_sensitive, 0) as is_sensitive, updated_at"
                     " FROM tenant_field_schemas WHERE tenant_id = ? AND workspace_id = ? ORDER BY position",
                     (tenant_id, workspace_id)
                 ).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT field_key, label, field_type, required, position, validation_rules,"
-                    " COALESCE(is_sensitive, 0) as is_sensitive"
+                    " COALESCE(is_sensitive, 0) as is_sensitive, updated_at"
                     " FROM tenant_field_schemas WHERE tenant_id = ? AND workspace_id IS NULL ORDER BY position",
                     (tenant_id,)
                 ).fetchall()
@@ -1047,6 +1054,9 @@ def upsert_field_schema(tenant_id: str, field: dict, workspace_id: int | None = 
     if USE_SUPABASE:
         url = f"{_SUPABASE_URL}/rest/v1/tenant_field_schemas"
         row = {"tenant_id": tenant_id, **field, "is_sensitive": bool(field.get("is_sensitive", False))}
+        # Carimbo de atualização app-side (Postgres não bumpa updated_at sozinho num UPDATE).
+        # Propaga-se ao INSERT (row) e ao UPDATE (upd deriva de row), abaixo.
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
         if workspace_id is not None:
             row["workspace_id"] = workspace_id
         # Manual upsert scoped to (tenant, field_key, workspace) — robust to constraint shape
@@ -1074,12 +1084,12 @@ def upsert_field_schema(tenant_id: str, field: dict, workspace_id: int | None = 
         if workspace_id is not None:
             conn.execute(
                 "INSERT INTO tenant_field_schemas"
-                " (tenant_id, workspace_id, field_key, label, field_type, required, position, validation_rules, is_sensitive)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " (tenant_id, workspace_id, field_key, label, field_type, required, position, validation_rules, is_sensitive, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)"
                 " ON CONFLICT(tenant_id, field_key) DO UPDATE SET"
                 " label=excluded.label, field_type=excluded.field_type, required=excluded.required,"
                 " position=excluded.position, validation_rules=excluded.validation_rules,"
-                " is_sensitive=excluded.is_sensitive",
+                " is_sensitive=excluded.is_sensitive, updated_at=CURRENT_TIMESTAMP",
                 (tenant_id, workspace_id, field["field_key"], field["label"], field["field_type"],
                  1 if field.get("required", True) else 0, field.get("position", 0),
                  json.dumps(field.get("validation_rules", {})),
@@ -1088,12 +1098,12 @@ def upsert_field_schema(tenant_id: str, field: dict, workspace_id: int | None = 
         else:
             conn.execute(
                 "INSERT INTO tenant_field_schemas"
-                " (tenant_id, field_key, label, field_type, required, position, validation_rules, is_sensitive)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                " (tenant_id, field_key, label, field_type, required, position, validation_rules, is_sensitive, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)"
                 " ON CONFLICT(tenant_id, field_key) DO UPDATE SET"
                 " label=excluded.label, field_type=excluded.field_type, required=excluded.required,"
                 " position=excluded.position, validation_rules=excluded.validation_rules,"
-                " is_sensitive=excluded.is_sensitive",
+                " is_sensitive=excluded.is_sensitive, updated_at=CURRENT_TIMESTAMP",
                 (tenant_id, field["field_key"], field["label"], field["field_type"],
                  1 if field.get("required", True) else 0, field.get("position", 0),
                  json.dumps(field.get("validation_rules", {})),
